@@ -1,0 +1,170 @@
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix ont:   <http://emailsearch.local/ontology#> .
+
+# ============================================================
+# Email Search Ontology  (TBox — editable)
+# Data instances live in data/email_data.ttl  (ABox — generated)
+# ============================================================
+
+<http://emailsearch.local/ontology>
+    a owl:Ontology ;
+    rdfs:label "Email Search Ontology" ;
+    rdfs:comment "OWL DL ontology for automated email classification. Edit this file freely; data/email_data.ttl is regenerated from it without modification." .
+
+# ── Classes ──────────────────────────────────────────────────
+
+ont:Email
+    a owl:Class ;
+    rdfs:label "Email" ;
+    rdfs:comment "An individual email message." .
+
+ont:Person
+    a owl:Class ;
+    rdfs:label "Person" ;
+    rdfs:comment "A human participant in email communication." .
+
+ont:Organization
+    a owl:Class ;
+    rdfs:label "Organization" ;
+    rdfs:comment "A company, institution, or group mentioned in emails." .
+
+ont:Topic
+    a owl:Class ;
+    rdfs:label "Topic" ;
+    rdfs:comment "A latent semantic topic derived automatically from LDA analysis of email bodies." .
+
+ont:Thread
+    a owl:Class ;
+    rdfs:label "Thread" ;
+    rdfs:comment "A conversation thread grouping related emails by In-Reply-To / References headers." .
+
+ont:Attachment
+    a owl:Class ;
+    rdfs:label "Attachment" ;
+    rdfs:comment "A file attached to an email." .
+
+ont:Location
+    a owl:Class ;
+    rdfs:label "Location" ;
+    rdfs:comment "A geographical location (city, country, etc.) extracted via NER." .
+
+# ── Object Properties ────────────────────────────────────────
+
+ont:hasSender
+    a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:label "has sender" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Person .
+
+ont:hasRecipient
+    a owl:ObjectProperty ;
+    rdfs:label "has recipient" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Person .
+
+ont:hasCCRecipient
+    a owl:ObjectProperty ;
+    rdfs:label "has CC recipient" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Person .
+
+ont:belongsToThread
+    a owl:ObjectProperty ;
+    rdfs:label "belongs to thread" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Thread .
+
+ont:hasTopic
+    a owl:ObjectProperty ;
+    rdfs:label "has topic" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Topic .
+
+ont:mentionsPerson
+    a owl:ObjectProperty ;
+    rdfs:label "mentions person" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Person .
+
+ont:mentionsOrganization
+    a owl:ObjectProperty ;
+    rdfs:label "mentions organization" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Organization .
+
+ont:mentionsLocation
+    a owl:ObjectProperty ;
+    rdfs:label "mentions location" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Location .
+
+ont:hasAttachment
+    a owl:ObjectProperty ;
+    rdfs:label "has attachment" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Attachment .
+
+ont:worksFor
+    a owl:ObjectProperty ;
+    rdfs:label "works for" ;
+    rdfs:domain ont:Person ;
+    rdfs:range  ont:Organization .
+
+ont:inReplyTo
+    a owl:ObjectProperty ;
+    rdfs:label "in reply to" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  ont:Email .
+
+# ── Data Properties ──────────────────────────────────────────
+
+ont:hasSubject
+    a owl:DatatypeProperty ;
+    rdfs:label "has subject" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  xsd:string .
+
+ont:hasSentDate
+    a owl:DatatypeProperty ;
+    rdfs:label "has sent date" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  xsd:dateTime .
+
+ont:hasMessageId
+    a owl:DatatypeProperty ;
+    rdfs:label "has message ID" ;
+    rdfs:domain ont:Email ;
+    rdfs:range  xsd:string .
+
+ont:emailAddress
+    a owl:DatatypeProperty, owl:FunctionalProperty ;
+    rdfs:label "email address" ;
+    rdfs:domain ont:Person ;
+    rdfs:range  xsd:string .
+
+ont:personName
+    a owl:DatatypeProperty ;
+    rdfs:label "person name" ;
+    rdfs:domain ont:Person ;
+    rdfs:range  xsd:string .
+
+ont:organizationName
+    a owl:DatatypeProperty ;
+    rdfs:label "organization name" ;
+    rdfs:domain ont:Organization ;
+    rdfs:range  xsd:string .
+
+ont:topicKeywords
+    a owl:DatatypeProperty ;
+    rdfs:label "topic keywords" ;
+    rdfs:domain ont:Topic ;
+    rdfs:range  xsd:string .
+
+ont:attachmentName
+    a owl:DatatypeProperty ;
+    rdfs:label "attachment name" ;
+    rdfs:domain ont:Attachment ;
+    rdfs:range  xsd:string .

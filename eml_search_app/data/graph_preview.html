@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 620px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_058ce0c659ef709b074d3cffa380b9b2", "label": "New Opportunity", "shape": "dot", "size": 14, "title": "Email: New Opportunity"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_0e3db82c0500c5eb714037ebc4163182", "label": "Vacation Request", "shape": "dot", "size": 14, "title": "Email: Vacation Request"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_03044bba07d8f624f0a6fa37dd7f40f5", "label": "Personal Note", "shape": "dot", "size": 14, "title": "Email: Personal Note"}, {"borderWidth": 3, "color": "#e67e22", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#person_3bc81bc52e7f", "label": "user1@domain.com", "shape": "dot", "size": 20, "title": "Person: user1@domain.com"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_61ee19460a641c874080fc8c33ed1788", "label": "Payment Confirmation", "shape": "dot", "size": 14, "title": "Email: Payment Confirmation"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_ddc3102fb7b77584e7d5c444a4929efc", "label": "Team Building Event", "shape": "dot", "size": 14, "title": "Email: Team Building Event"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_550f73469afa1f8c5116a0b889129ef6", "label": "Project Update", "shape": "dot", "size": 14, "title": "Email: Project Update"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_a75d2372f8ba833e9881d8ce39141217", "label": "Thank You Note", "shape": "dot", "size": 14, "title": "Email: Thank You Note"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_758321ab13be92cbb75d4ff68a240877", "label": "Invoice Attached", "shape": "dot", "size": 14, "title": "Email: Invoice Attached"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_77e00c9acdff8533fe015965df6a506d", "label": "Vacation Request", "shape": "dot", "size": 14, "title": "Email: Vacation Request"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_8cc2eb43d61f25f233ac1293ac13f661", "label": "Support Ticket Update", "shape": "dot", "size": 14, "title": "Email: Support Ticket Update"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_f218d17b98b6bf8213206d4c243b2c35", "label": "Team Building Event", "shape": "dot", "size": 14, "title": "Email: Team Building Event"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_03f680f059ac0725d2ca9ee00b53069b", "label": "Payment Confirmation", "shape": "dot", "size": 14, "title": "Email: Payment Confirmation"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_4e1884ec8390e2baae06167a08ba8c26", "label": "Team Building Event", "shape": "dot", "size": 14, "title": "Email: Team Building Event"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_feeb92b7f18da2eee2dfa4d6965b67cc", "label": "Payment Confirmation", "shape": "dot", "size": 14, "title": "Email: Payment Confirmation"}, {"borderWidth": 2, "color": "#1a73e8", "font": {"color": "#000000"}, "id": "http://emailsearch.local/data#email_58867a1bdf9d291d8777d75df4cb4ae1", "label": "System Notification", "shape": "dot", "size": 14, "title": "Email: System Notification"}]);
+                  edges = new vis.DataSet([{"from": "http://emailsearch.local/data#email_feeb92b7f18da2eee2dfa4d6965b67cc", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_758321ab13be92cbb75d4ff68a240877", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_58867a1bdf9d291d8777d75df4cb4ae1", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_ddc3102fb7b77584e7d5c444a4929efc", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_77e00c9acdff8533fe015965df6a506d", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_058ce0c659ef709b074d3cffa380b9b2", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_61ee19460a641c874080fc8c33ed1788", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_a75d2372f8ba833e9881d8ce39141217", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_8cc2eb43d61f25f233ac1293ac13f661", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_03044bba07d8f624f0a6fa37dd7f40f5", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_0e3db82c0500c5eb714037ebc4163182", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_f218d17b98b6bf8213206d4c243b2c35", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_03f680f059ac0725d2ca9ee00b53069b", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_4e1884ec8390e2baae06167a08ba8c26", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}, {"from": "http://emailsearch.local/data#email_550f73469afa1f8c5116a0b889129ef6", "label": "hasRecipient", "title": "hasRecipient", "to": "http://emailsearch.local/data#person_3bc81bc52e7f"}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"stabilization": {"iterations": 200}}, "nodes": {"font": {"size": 13, "color": "#000000"}, "borderWidth": 2}, "edges": {"font": {"size": 11, "color": "#333333", "align": "middle"}, "arrows": {"to": {"enabled": true, "scaleFactor": 0.8}}, "smooth": {"type": "curvedCW", "roundness": 0.2}}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

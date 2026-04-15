@@ -1,0 +1,639 @@
+"""EML Search — Streamlit app entry point."""
+import sys
+from pathlib import Path
+
+import streamlit as st
+import streamlit.components.v1 as components
+
+APP_DIR = Path(__file__).parent
+sys.path.insert(0, str(APP_DIR))
+
+import config
+from modules import indexer, nlp_engine, search_engine, tagger
+from modules.watcher import EmailWatcher
+from modules.graph_builder import (
+    build_abox, save_abox, load_abox, get_merged_graph,
+    sparql_query, get_graph_stats, get_all_graph_nodes, get_subgraph,
+)
+
+# ── Page config ──────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="EML Search",
+    page_icon="📧",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+indexer.init_db()
+
+
+@st.cache_resource
+def _get_watcher(folder: str) -> EmailWatcher:
+    w = EmailWatcher(folder)
+    w.start()
+    return w
+
+
+def _current_folder() -> str:
+    return config.load_settings().get("email_folder", config.DEFAULT_EMAIL_FOLDER)
+
+
+_watcher = _get_watcher(_current_folder())
+
+# ── Tab-switch helper (must run before tabs are rendered) ─────────────────────
+# When SPARQL navigation buttons set switch_to_search=True, inject JS that
+# clicks the Search tab, then clear the flag so it doesn't fire again.
+if st.session_state.pop("switch_to_search", False):
+    components.html("""
+    <script>
+    setTimeout(function () {
+        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].textContent.trim() === "Search") {
+                tabs[i].click();
+                break;
+            }
+        }
+    }, 250);
+    </script>
+    """, height=0)
+
+
+def _nav_to_search(query: str) -> None:
+    """Set the search query and trigger a tab switch to Search."""
+    st.session_state["search_query"] = query
+    st.session_state["switch_to_search"] = True
+    st.rerun()
+
+
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.title("📧 EML Search")
+    total = indexer.get_email_count()
+    st.metric("Emails indexed", total)
+    st.caption(f"Watcher: {_watcher.status}")
+
+    st.divider()
+    tag_counts = tagger.get_tag_counts()
+    tag_options = {f"{t['name']} ({t['count']})": t["id"] for t in tag_counts}
+
+    st.subheader("Filters")
+    f_sender      = st.text_input("Sender contains", key="f_sender")
+    f_date_from   = st.date_input("Date from", value=None, key="f_date_from")
+    f_date_to     = st.date_input("Date to", value=None, key="f_date_to")
+    f_attachments = st.checkbox("Has attachments only", key="f_attachments")
+    f_tag_label   = st.selectbox(
+        "Tag", options=["(any)"] + list(tag_options.keys()), key="f_tag"
+    )
+
+    filters = {
+        "sender":          f_sender or None,
+        "date_from":       str(f_date_from) if f_date_from else None,
+        "date_to":         str(f_date_to) if f_date_to else None,
+        "has_attachments": f_attachments or None,
+        "tag_id":          tag_options.get(f_tag_label) if f_tag_label != "(any)" else None,
+    }
+
+# ── Tabs ─────────────────────────────────────────────────────────────────────
+tab_search, tab_tags, tab_graph, tab_settings = st.tabs(
+    ["Search", "Tags", "Knowledge Graph", "Settings"]
+)
+
+# ════════════════════════════════════════════════════════════════════════════
+# SEARCH TAB
+# ════════════════════════════════════════════════════════════════════════════
+with tab_search:
+    col_q, col_mode = st.columns([5, 1])
+    with col_q:
+        query = st.text_input(
+            "Search emails",
+            placeholder="Enter keywords, names, phrases…",
+            label_visibility="collapsed",
+            key="search_query",
+        )
+    with col_mode:
+        mode = st.selectbox(
+            "Mode", ["hybrid", "fts", "semantic"],
+            label_visibility="collapsed",
+            key="search_mode",
+        )
+
+    results = search_engine.search(query, mode=mode, filters=filters, limit=50)
+
+    if total == 0:
+        st.info("No emails indexed yet. Go to **Settings** to point the app at your EML folder.")
+    elif not results and query:
+        st.warning("No results found.")
+    else:
+        if query:
+            st.caption(f"{len(results)} result(s) — mode: **{mode}**")
+
+        if "open_email" not in st.session_state:
+            st.session_state.open_email = None
+
+        all_tags = tagger.get_all_tags()  # for the add-tag dropdown
+
+        for r in results:
+            with st.container(border=True):
+                hdr, _ = st.columns([4, 1])
+                with hdr:
+                    clicked = st.button(
+                        f"**{r.get('subject') or '(no subject)'}**",
+                        key=f"btn_{r['id']}",
+                        use_container_width=True,
+                    )
+                    if clicked:
+                        st.session_state.open_email = (
+                            None if st.session_state.open_email == r["id"] else r["id"]
+                        )
+                    st.caption(
+                        f"From: {r.get('sender_name', '')} <{r.get('sender_email', '')}>"
+                        f"  ·  {(r.get('date') or '')[:16]}"
+                        + ("  ·  📎" if r.get("has_attachments") else "")
+                    )
+
+                if st.session_state.open_email == r["id"]:
+                    em = indexer.get_email_by_id(r["id"])
+                    if em:
+                        st.divider()
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.write(f"**Subject:** {em.get('subject', '')}")
+                            st.write(
+                                f"**From:** {em.get('sender_name', '')} "
+                                f"&lt;{em.get('sender_email', '')}&gt;"
+                            )
+                            to_list = ", ".join(
+                                f"{p['name']} <{p['email']}>"
+                                for p in (em.get("recipients") or [])
+                            )
+                            st.write(f"**To:** {to_list}")
+                        with c2:
+                            st.write(f"**Date:** {em.get('date', '')}")
+                            if em.get("attachment_names"):
+                                st.write(f"**Attachments:** {', '.join(em['attachment_names'])}")
+
+                        body_col, kw_col = st.columns([3, 1])
+                        with body_col:
+                            st.text_area(
+                                "Body",
+                                value=em.get("body_text", "")[:3000],
+                                height=200,
+                                disabled=True,
+                                key=f"body_{em['id']}",
+                            )
+                        with kw_col:
+                            keywords = nlp_engine.extract_keywords(em.get("body_text", ""))
+                            if keywords:
+                                st.write("**Keywords**")
+                                st.write(", ".join(keywords))
+
+                        # ── Tag management for this email ────────────────
+                        st.divider()
+                        st.write("**Tags**")
+
+                        current_tags = tagger.get_email_tags(em["id"])
+                        assigned_ids = {t["id"] for t in current_tags}
+
+                        # Show current tags with remove buttons
+                        tag_cols = st.columns(min(len(current_tags) + 1, 6))
+                        for i, t in enumerate(current_tags):
+                            with tag_cols[i % 6]:
+                                source_icon = "👤" if t["source"] == "manual" else "🤖"
+                                if st.button(
+                                    f"{source_icon} {t['name']} ✕",
+                                    key=f"rm_{em['id']}_{t['id']}",
+                                    help="Click to remove this tag",
+                                ):
+                                    tagger.remove_tag_manual(em["id"], t["id"])
+                                    st.rerun()
+
+                        if not current_tags:
+                            st.caption("No tags assigned.")
+
+                        # Add tag dropdown (only tags not already assigned)
+                        available = [t for t in all_tags if t["id"] not in assigned_ids]
+                        if available:
+                            add_col, btn_col = st.columns([3, 1])
+                            with add_col:
+                                chosen = st.selectbox(
+                                    "Add tag",
+                                    options=[""] + [t["name"] for t in available],
+                                    label_visibility="collapsed",
+                                    key=f"add_tag_select_{em['id']}",
+                                )
+                            with btn_col:
+                                if st.button("Add", key=f"add_tag_btn_{em['id']}") and chosen:
+                                    tag_id = next(
+                                        t["id"] for t in available if t["name"] == chosen
+                                    )
+                                    tagger.assign_tag_manual(em["id"], tag_id)
+                                    st.rerun()
+                        elif not all_tags:
+                            st.caption("Create tags in the **Tags** tab first.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAGS TAB
+# ════════════════════════════════════════════════════════════════════════════
+with tab_tags:
+
+    # ── Tag Library ──────────────────────────────────────────────────────────
+    st.subheader("Tag library")
+    st.caption("Tags are human-defined categories. NLP classification will never remove them.")
+
+    all_tags = tagger.get_all_tags()
+
+    if all_tags:
+        tag_counts_map = {t["id"]: t["count"] for t in tagger.get_tag_counts()}
+        cols = st.columns(min(len(all_tags), 5))
+        for i, t in enumerate(all_tags):
+            with cols[i % 5]:
+                count = tag_counts_map.get(t["id"], 0)
+                if st.button(
+                    f"🏷 {t['name']}  ({count})  ✕",
+                    key=f"del_tag_{t['id']}",
+                    help="Click to delete this tag and all its assignments",
+                    use_container_width=True,
+                ):
+                    tagger.delete_tag(t["id"])
+                    st.rerun()
+    else:
+        st.info("No tags defined yet. Add your first tag below.")
+
+    st.divider()
+    new_tag_col, add_col = st.columns([4, 1])
+    with new_tag_col:
+        new_tag_name = st.text_input(
+            "New tag name",
+            placeholder="e.g. Invoice, Meeting, Urgent, Project Alpha…",
+            label_visibility="collapsed",
+            key="new_tag_input",
+        )
+    with add_col:
+        if st.button("Add tag", type="primary", key="add_tag_btn"):
+            if new_tag_name.strip():
+                tagger.add_tag(new_tag_name.strip())
+                st.rerun()
+            else:
+                st.warning("Enter a tag name first.")
+
+    # ── NLP Classification ───────────────────────────────────────────────────
+    st.divider()
+    st.subheader("NLP auto-classification")
+    st.caption(
+        "Uses sentence-transformer cosine similarity to match tag names against email content. "
+        "Only **adds** tags — never removes. Manually removed tags are permanently blocked from "
+        "being re-added by NLP for that email."
+    )
+
+    if not all_tags:
+        st.warning("Add at least one tag above before running classification.")
+    else:
+        threshold = st.slider(
+            "Similarity threshold",
+            min_value=0.10,
+            max_value=0.60,
+            value=0.25,
+            step=0.05,
+            key="nlp_threshold",
+            help="Higher = fewer but more confident assignments. Lower = more assignments.",
+        )
+
+        if st.button("Classify emails with NLP", type="primary", key="run_nlp"):
+            with st.spinner("Classifying…"):
+                result = tagger.classify_emails_nlp(threshold=threshold)
+            st.success(
+                f"Done — **{result['new_assignments']}** new tag assignment(s) "
+                f"across **{result['emails_affected']}** email(s)."
+            )
+            st.rerun()
+
+    # ── Browse by tag ─────────────────────────────────────────────────────────
+    if all_tags:
+        st.divider()
+        st.subheader("Browse by tag")
+
+        tag_name_map = {t["name"]: t["id"] for t in all_tags}
+        chosen_tag = st.selectbox(
+            "Select tag",
+            options=list(tag_name_map.keys()),
+            key="browse_tag_select",
+        )
+        if chosen_tag:
+            tag_id = tag_name_map[chosen_tag]
+            tagged_emails = tagger.get_emails_by_tag(tag_id)
+
+            st.caption(f"{len(tagged_emails)} email(s) tagged **{chosen_tag}**")
+
+            for em in tagged_emails:
+                source_badge = "👤 manual" if em["source"] == "manual" else "🤖 NLP"
+                with st.container(border=True):
+                    src_col, info_col = st.columns([1, 5])
+                    with src_col:
+                        st.caption(source_badge)
+                    with info_col:
+                        st.write(f"**{em.get('subject') or '(no subject)'}**")
+                        st.caption(
+                            f"From: {em.get('sender_name', '')} <{em.get('sender_email', '')}>"
+                            f"  ·  {(em.get('date') or '')[:16]}"
+                            + ("  ·  📎" if em.get("has_attachments") else "")
+                        )
+
+                    rm_col, _ = st.columns([1, 5])
+                    with rm_col:
+                        if st.button("Remove tag", key=f"browse_rm_{tag_id}_{em['id']}"):
+                            tagger.remove_tag_manual(em["id"], tag_id)
+                            st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# KNOWLEDGE GRAPH TAB
+# ════════════════════════════════════════════════════════════════════════════
+with tab_graph:
+    st.subheader("RDF/OWL Knowledge Graph")
+
+    abox_path = Path(config.GRAPH_DATA_PATH)
+    stats_col, build_col = st.columns([3, 1])
+
+    with build_col:
+        if st.button("Build / Rebuild Graph", type="primary", key="build_graph"):
+            with st.spinner("Building ABox from indexed data…"):
+                try:
+                    all_ids = indexer.get_all_email_ids()
+                    emails_data = [indexer.get_email_by_id(eid) for eid in all_ids]
+                    emails_data = [e for e in emails_data if e]
+
+                    conn = indexer._get_conn()
+                    ent_rows = conn.execute(
+                        "SELECT email_id, entity_text, entity_label FROM email_entities"
+                    ).fetchall()
+                    entities_map: dict[str, list] = {}
+                    for row in ent_rows:
+                        entities_map.setdefault(row["email_id"], []).append(
+                            {"text": row["entity_text"], "label": row["entity_label"]}
+                        )
+
+                    tag_rows = conn.execute(
+                        "SELECT et.email_id, t.name FROM email_tags et JOIN tags t ON t.id = et.tag_id"
+                    ).fetchall()
+                    tags_map: dict[str, list] = {}
+                    for row in tag_rows:
+                        tags_map.setdefault(row["email_id"], []).append(row["name"])
+
+                    g = build_abox(emails_data, entities_map, tags_map)
+                    save_abox(g)
+                    st.success(f"Graph built — {len(g)} triples.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Graph build failed: {exc}")
+
+    if not abox_path.exists():
+        st.info("No graph data yet. Click **Build / Rebuild Graph** to generate it.")
+    else:
+        try:
+            abox = load_abox()
+        except Exception as exc:
+            st.error(f"Failed to load graph: {exc}")
+            abox = None
+
+        if abox is not None:
+            stats = get_graph_stats(abox)
+            with stats_col:
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Triples",       stats["triples"])
+                c2.metric("Emails",        stats["emails"])
+                c3.metric("Persons",       stats["persons"])
+                c4.metric("Organisations", stats["organizations"])
+                c5.metric("Tags",          stats["topics"])
+
+            # ── Node selection ────────────────────────────────────────────
+            st.divider()
+            st.subheader("Interactive graph")
+            st.caption(
+                "Select seed nodes to visualise. The graph will include those nodes "
+                "and every directly connected neighbour of the selected types."
+            )
+
+            all_nodes = get_all_graph_nodes(abox)
+
+            # Type filter checkboxes
+            type_names = ["Email", "Person", "Organization", "Tag", "Thread", "Location"]
+            type_cols = st.columns(len(type_names))
+            allowed_types: set[str] = set()
+            for i, tname in enumerate(type_names):
+                with type_cols[i]:
+                    if st.checkbox(tname, value=True, key=f"gt_{tname}"):
+                        allowed_types.add(tname)
+
+            # Search box to narrow the multiselect
+            node_search = st.text_input(
+                "Filter nodes by name",
+                placeholder="Type to search…",
+                key="node_search",
+            )
+
+            filtered = [
+                n for n in all_nodes
+                if (not node_search or node_search.lower() in n["label"].lower())
+                and n["type"] in allowed_types
+            ]
+
+            option_labels = [f"[{n['type']}] {n['label']}" for n in filtered]
+            label_to_uri  = {f"[{n['type']}] {n['label']}": n["uri"] for n in filtered}
+
+            selected_labels = st.multiselect(
+                f"Seed nodes ({len(filtered)} shown)",
+                options=option_labels,
+                key="selected_graph_nodes",
+            )
+
+            if not selected_labels:
+                st.info("Select at least one seed node above to render the graph.")
+            else:
+                if st.button("Render graph", type="primary", key="render_graph"):
+                    seed_uris = [label_to_uri[l] for l in selected_labels]
+                    with st.spinner("Rendering…"):
+                        try:
+                            from pyvis.network import Network
+
+                            nodes, edges = get_subgraph(abox, seed_uris, allowed_types)
+
+                            net = Network(
+                                height="620px", width="100%",
+                                bgcolor="#ffffff", font_color="#000000",
+                            )
+                            net.set_options("""{
+                              "physics": {"stabilization": {"iterations": 200}},
+                              "nodes": {
+                                "font": {"size": 13, "color": "#000000"},
+                                "borderWidth": 2
+                              },
+                              "edges": {
+                                "font": {"size": 11, "color": "#333333", "align": "middle"},
+                                "arrows": {"to": {"enabled": true, "scaleFactor": 0.8}},
+                                "smooth": {"type": "curvedCW", "roundness": 0.2}
+                              }
+                            }""")
+
+                            for n in nodes:
+                                is_seed = n["id"] in set(seed_uris)
+                                net.add_node(
+                                    n["id"],
+                                    label=n["label"],
+                                    color=n["color"],
+                                    title=f"{n['type']}: {n['label']}",
+                                    size=20 if is_seed else 14,
+                                    borderWidth=3 if is_seed else 2,
+                                )
+                            for e in edges:
+                                net.add_edge(
+                                    e["from"], e["to"],
+                                    label=e["label"],
+                                    title=e["label"],
+                                )
+
+                            html_path = str(Path(config.DATA_DIR) / "graph_preview.html")
+                            net.save_graph(html_path)
+                            components.html(open(html_path).read(), height=640, scrolling=False)
+                            st.caption(
+                                f"{len(nodes)} node(s), {len(edges)} edge(s). "
+                                "Seed nodes are shown larger with a thicker border."
+                            )
+                        except ImportError:
+                            st.error("pyvis not installed. Run: pip install pyvis")
+                        except Exception as exc:
+                            st.error(f"Render failed: {exc}")
+
+            # ── SPARQL ────────────────────────────────────────────────────
+            st.divider()
+            st.subheader("SPARQL query")
+            st.caption(
+                "Click **Search** / **Open email** on any result row to jump to that "
+                "item in the Search tab."
+            )
+
+            default_sparql = """PREFIX ont: <http://emailsearch.local/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?email ?subject ?sender
+WHERE {
+  ?email rdf:type ont:Email ;
+         ont:hasSubject ?subject ;
+         ont:hasSender ?person .
+  ?person ont:emailAddress ?sender .
+}
+LIMIT 20"""
+            sparql_input = st.text_area(
+                "SPARQL SELECT query", value=default_sparql, height=180, key="sparql_input"
+            )
+
+            if st.button("Run query", key="run_sparql"):
+                with st.spinner("Querying…"):
+                    try:
+                        merged = get_merged_graph()
+                        rows = sparql_query(merged, sparql_input)
+                        st.session_state["sparql_results"] = rows
+                    except Exception as exc:
+                        st.error(f"Query error: {exc}")
+                        st.session_state["sparql_results"] = []
+
+            sparql_rows = st.session_state.get("sparql_results")
+            if sparql_rows is not None:
+                if not sparql_rows:
+                    st.info("No results.")
+                else:
+                    import re as _re
+
+                    def _email_id_from_uri(val: str) -> str | None:
+                        m = _re.search(r"data#email_([a-f0-9]+)", val)
+                        return m.group(1) if m else None
+
+                    def _is_email_address(val: str) -> bool:
+                        return bool(_re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", val))
+
+                    st.caption(f"{len(sparql_rows)} result(s)")
+
+                    for row_i, row in enumerate(sparql_rows):
+                        with st.container(border=True):
+                            val_cols = st.columns(len(row))
+                            for col_i, (key, val) in enumerate(row.items()):
+                                with val_cols[col_i]:
+                                    st.caption(key)
+                                    st.write(val if len(val) <= 80 else val[:77] + "…")
+
+                                    email_id = _email_id_from_uri(val)
+                                    if email_id:
+                                        if st.button(
+                                            "Open email",
+                                            key=f"sparql_nav_{row_i}_{col_i}",
+                                        ):
+                                            em = indexer.get_email_by_id(email_id)
+                                            if em and em.get("subject"):
+                                                _nav_to_search(em["subject"])
+                                            else:
+                                                _nav_to_search(email_id)
+                                    elif _is_email_address(val):
+                                        if st.button(
+                                            "Search sender",
+                                            key=f"sparql_nav_{row_i}_{col_i}",
+                                        ):
+                                            _nav_to_search(val)
+                                    elif (
+                                        not val.startswith("http")
+                                        and len(val) > 3
+                                    ):
+                                        if st.button(
+                                            "Search",
+                                            key=f"sparql_nav_{row_i}_{col_i}",
+                                        ):
+                                            _nav_to_search(val)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SETTINGS TAB
+# ════════════════════════════════════════════════════════════════════════════
+with tab_settings:
+    st.subheader("Settings")
+    settings = config.load_settings()
+
+    new_folder = st.text_input(
+        "EML folder path",
+        value=settings.get("email_folder", config.DEFAULT_EMAIL_FOLDER),
+        key="settings_folder",
+    )
+    if st.button("Save folder", key="save_folder"):
+        settings["email_folder"] = new_folder
+        config.save_settings(settings)
+        st.success("Saved. Restart the app to pick up the new folder.")
+
+    st.divider()
+    st.subheader("Indexing")
+    if st.button("Index new emails now", type="primary", key="index_now"):
+        with st.spinner("Scanning for new emails…"):
+            folder = settings.get("email_folder", config.DEFAULT_EMAIL_FOLDER)
+            new_files = indexer.get_unindexed_files(folder)
+            if not new_files:
+                st.info("No new .eml files found.")
+            else:
+                from modules.watcher import run_initial_index
+                result = run_initial_index(folder)
+                st.success(f"Indexed {result['indexed']} new emails ({result['total']} total).")
+                st.rerun()
+
+    st.divider()
+    st.subheader("Database")
+    db_size    = Path(config.DB_PATH).stat().st_size / 1024 if Path(config.DB_PATH).exists() else 0
+    graph_size = Path(config.GRAPH_DATA_PATH).stat().st_size / 1024 if Path(config.GRAPH_DATA_PATH).exists() else 0
+    st.write(f"Index DB: **{db_size:.1f} KB** | Graph ABox: **{graph_size:.1f} KB**")
+
+    ont_path = Path(config.ONTOLOGY_PATH)
+    if ont_path.exists():
+        with st.expander("View ontology (TBox — read-only here)"):
+            st.code(ont_path.read_text(), language="turtle")
+
+    st.divider()
+    st.caption(
+        "Ontology: `ontology/email_ontology.ttl` — edit in any text editor, then rebuild the graph.\n"
+        "Data: `data/email_data.ttl` — auto-generated, do not edit manually."
+    )
