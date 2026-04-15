@@ -61,7 +61,7 @@ if st.session_state.pop("switch_to_search", False):
 
 def _nav_to_search(query: str) -> None:
     """Set the search query and trigger a tab switch to Search."""
-    st.session_state["search_query"] = query
+    st.session_state["_nav_query"] = query
     st.session_state["switch_to_search"] = True
     st.rerun()
 
@@ -103,6 +103,9 @@ tab_search, tab_tags, tab_graph, tab_settings = st.tabs(
 # SEARCH TAB
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
+    if "_nav_query" in st.session_state:
+        st.session_state["search_query"] = st.session_state.pop("_nav_query")
+
     col_q, col_mode = st.columns([5, 1])
     with col_q:
         query = st.text_input(

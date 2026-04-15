@@ -50,11 +50,6 @@ def extract_keywords(text: str, top_n: int = 10) -> list[str]:
 
     candidates: list[str] = []
 
-    # Noun chunks (meaningful multi-word phrases)
-    for chunk in doc.noun_chunks:
-        if not chunk.root.is_stop and len(chunk.text.strip()) > 2:
-            candidates.append(chunk.text.lower().strip())
-
     # Individual content words (nouns and proper nouns)
     for token in doc:
         if (
