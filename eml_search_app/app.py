@@ -66,6 +66,89 @@ def _nav_to_search(query: str) -> None:
     st.rerun()
 
 
+def _nav_to_email(email_id: str) -> None:
+    """Navigate directly to a specific email by ID (from Knowledge Graph)."""
+    st.session_state["_direct_email_id"] = email_id
+    st.session_state["switch_to_search"] = True
+    st.rerun()
+
+
+def _render_email_detail(em: dict, all_tags: list) -> None:
+    """Render the full detail view for a single email (body, tags, keywords)."""
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write(f"**Subject:** {em.get('subject', '')}")
+        st.write(
+            f"**From:** {em.get('sender_name', '')} "
+            f"&lt;{em.get('sender_email', '')}&gt;"
+        )
+        to_list = ", ".join(
+            f"{p['name']} <{p['email']}>"
+            for p in (em.get("recipients") or [])
+        )
+        st.write(f"**To:** {to_list}")
+    with c2:
+        st.write(f"**Date:** {em.get('date', '')}")
+        if em.get("attachment_names"):
+            st.write(f"**Attachments:** {', '.join(em['attachment_names'])}")
+
+    body_col, kw_col = st.columns([3, 1])
+    with body_col:
+        st.text_area(
+            "Body",
+            value=em.get("body_text", "")[:3000],
+            height=200,
+            disabled=True,
+            key=f"body_{em['id']}",
+        )
+    with kw_col:
+        keywords = nlp_engine.extract_keywords(em.get("body_text", ""))
+        if keywords:
+            st.write("**Keywords**")
+            st.write(", ".join(keywords))
+
+    st.divider()
+    st.write("**Tags**")
+
+    current_tags = tagger.get_email_tags(em["id"])
+    assigned_ids = {t["id"] for t in current_tags}
+
+    tag_cols = st.columns(min(len(current_tags) + 1, 6))
+    for i, t in enumerate(current_tags):
+        with tag_cols[i % 6]:
+            source_icon = "👤" if t["source"] == "manual" else "🤖"
+            if st.button(
+                f"{source_icon} {t['name']} ✕",
+                key=f"rm_{em['id']}_{t['id']}",
+                help="Click to remove this tag",
+            ):
+                tagger.remove_tag_manual(em["id"], t["id"])
+                st.rerun()
+
+    if not current_tags:
+        st.caption("No tags assigned.")
+
+    available = [t for t in all_tags if t["id"] not in assigned_ids]
+    if available:
+        add_col, btn_col = st.columns([3, 1])
+        with add_col:
+            chosen = st.selectbox(
+                "Add tag",
+                options=[""] + [t["name"] for t in available],
+                label_visibility="collapsed",
+                key=f"add_tag_select_{em['id']}",
+            )
+        with btn_col:
+            if st.button("Add", key=f"add_tag_btn_{em['id']}") and chosen:
+                tag_id = next(
+                    t["id"] for t in available if t["name"] == chosen
+                )
+                tagger.assign_tag_manual(em["id"], tag_id)
+                st.rerun()
+    elif not all_tags:
+        st.caption("Create tags in the **Tags** tab first.")
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📧 EML Search")
@@ -103,137 +186,85 @@ tab_search, tab_tags, tab_graph, tab_settings = st.tabs(
 # SEARCH TAB
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
-    if "_nav_query" in st.session_state:
-        st.session_state["search_query"] = st.session_state.pop("_nav_query")
-
-    col_q, col_mode = st.columns([5, 1])
-    with col_q:
-        query = st.text_input(
-            "Search emails",
-            placeholder="Enter keywords, names, phrases…",
-            label_visibility="collapsed",
-            key="search_query",
-        )
-    with col_mode:
-        mode = st.selectbox(
-            "Mode", ["hybrid", "fts", "semantic"],
-            label_visibility="collapsed",
-            key="search_mode",
-        )
-
-    results = search_engine.search(query, mode=mode, filters=filters, limit=50)
-
-    if total == 0:
-        st.info("No emails indexed yet. Go to **Settings** to point the app at your EML folder.")
-    elif not results and query:
-        st.warning("No results found.")
-    else:
-        if query:
-            st.caption(f"{len(results)} result(s) — mode: **{mode}**")
-
-        if "open_email" not in st.session_state:
-            st.session_state.open_email = None
-
-        all_tags = tagger.get_all_tags()  # for the add-tag dropdown
-
-        for r in results:
+    # Direct email view: navigated here from Knowledge Graph "Open email"
+    if "_direct_email_id" in st.session_state:
+        direct_id = st.session_state["_direct_email_id"]
+        if st.button("← Back to search", key="back_to_search"):
+            del st.session_state["_direct_email_id"]
+            st.rerun()
+        em = indexer.get_email_by_id(direct_id)
+        if em:
+            all_tags = tagger.get_all_tags()
             with st.container(border=True):
-                hdr, _ = st.columns([4, 1])
-                with hdr:
-                    clicked = st.button(
-                        f"**{r.get('subject') or '(no subject)'}**",
-                        key=f"btn_{r['id']}",
-                        use_container_width=True,
-                    )
-                    if clicked:
-                        st.session_state.open_email = (
-                            None if st.session_state.open_email == r["id"] else r["id"]
+                st.subheader(em.get("subject") or "(no subject)")
+                st.caption(
+                    f"From: {em.get('sender_name', '')} <{em.get('sender_email', '')}>"
+                    f"  ·  {(em.get('date') or '')[:16]}"
+                    + ("  ·  📎" if em.get("has_attachments") else "")
+                )
+                st.divider()
+                _render_email_detail(em, all_tags)
+        else:
+            st.warning("Email not found.")
+    else:
+        # Normal search UI
+        if "_nav_query" in st.session_state:
+            st.session_state["search_query"] = st.session_state.pop("_nav_query")
+
+        col_q, col_mode = st.columns([5, 1])
+        with col_q:
+            query = st.text_input(
+                "Search emails",
+                placeholder="Enter keywords, names, phrases…",
+                label_visibility="collapsed",
+                key="search_query",
+            )
+        with col_mode:
+            mode = st.selectbox(
+                "Mode", ["hybrid", "fts", "semantic"],
+                label_visibility="collapsed",
+                key="search_mode",
+            )
+
+        results = search_engine.search(query, mode=mode, filters=filters, limit=50)
+
+        if total == 0:
+            st.info("No emails indexed yet. Go to **Settings** to point the app at your EML folder.")
+        elif not results and query:
+            st.warning("No results found.")
+        else:
+            if query:
+                st.caption(f"{len(results)} result(s) — mode: **{mode}**")
+
+            if "open_email" not in st.session_state:
+                st.session_state.open_email = None
+
+            all_tags = tagger.get_all_tags()  # for the add-tag dropdown
+
+            for r in results:
+                with st.container(border=True):
+                    hdr, _ = st.columns([4, 1])
+                    with hdr:
+                        clicked = st.button(
+                            f"**{r.get('subject') or '(no subject)'}**",
+                            key=f"btn_{r['id']}",
+                            use_container_width=True,
                         )
-                    st.caption(
-                        f"From: {r.get('sender_name', '')} <{r.get('sender_email', '')}>"
-                        f"  ·  {(r.get('date') or '')[:16]}"
-                        + ("  ·  📎" if r.get("has_attachments") else "")
-                    )
-
-                if st.session_state.open_email == r["id"]:
-                    em = indexer.get_email_by_id(r["id"])
-                    if em:
-                        st.divider()
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            st.write(f"**Subject:** {em.get('subject', '')}")
-                            st.write(
-                                f"**From:** {em.get('sender_name', '')} "
-                                f"&lt;{em.get('sender_email', '')}&gt;"
+                        if clicked:
+                            st.session_state.open_email = (
+                                None if st.session_state.open_email == r["id"] else r["id"]
                             )
-                            to_list = ", ".join(
-                                f"{p['name']} <{p['email']}>"
-                                for p in (em.get("recipients") or [])
-                            )
-                            st.write(f"**To:** {to_list}")
-                        with c2:
-                            st.write(f"**Date:** {em.get('date', '')}")
-                            if em.get("attachment_names"):
-                                st.write(f"**Attachments:** {', '.join(em['attachment_names'])}")
+                        st.caption(
+                            f"From: {r.get('sender_name', '')} <{r.get('sender_email', '')}>"
+                            f"  ·  {(r.get('date') or '')[:16]}"
+                            + ("  ·  📎" if r.get("has_attachments") else "")
+                        )
 
-                        body_col, kw_col = st.columns([3, 1])
-                        with body_col:
-                            st.text_area(
-                                "Body",
-                                value=em.get("body_text", "")[:3000],
-                                height=200,
-                                disabled=True,
-                                key=f"body_{em['id']}",
-                            )
-                        with kw_col:
-                            keywords = nlp_engine.extract_keywords(em.get("body_text", ""))
-                            if keywords:
-                                st.write("**Keywords**")
-                                st.write(", ".join(keywords))
-
-                        # ── Tag management for this email ────────────────
-                        st.divider()
-                        st.write("**Tags**")
-
-                        current_tags = tagger.get_email_tags(em["id"])
-                        assigned_ids = {t["id"] for t in current_tags}
-
-                        # Show current tags with remove buttons
-                        tag_cols = st.columns(min(len(current_tags) + 1, 6))
-                        for i, t in enumerate(current_tags):
-                            with tag_cols[i % 6]:
-                                source_icon = "👤" if t["source"] == "manual" else "🤖"
-                                if st.button(
-                                    f"{source_icon} {t['name']} ✕",
-                                    key=f"rm_{em['id']}_{t['id']}",
-                                    help="Click to remove this tag",
-                                ):
-                                    tagger.remove_tag_manual(em["id"], t["id"])
-                                    st.rerun()
-
-                        if not current_tags:
-                            st.caption("No tags assigned.")
-
-                        # Add tag dropdown (only tags not already assigned)
-                        available = [t for t in all_tags if t["id"] not in assigned_ids]
-                        if available:
-                            add_col, btn_col = st.columns([3, 1])
-                            with add_col:
-                                chosen = st.selectbox(
-                                    "Add tag",
-                                    options=[""] + [t["name"] for t in available],
-                                    label_visibility="collapsed",
-                                    key=f"add_tag_select_{em['id']}",
-                                )
-                            with btn_col:
-                                if st.button("Add", key=f"add_tag_btn_{em['id']}") and chosen:
-                                    tag_id = next(
-                                        t["id"] for t in available if t["name"] == chosen
-                                    )
-                                    tagger.assign_tag_manual(em["id"], tag_id)
-                                    st.rerun()
-                        elif not all_tags:
-                            st.caption("Create tags in the **Tags** tab first.")
+                    if st.session_state.open_email == r["id"]:
+                        em = indexer.get_email_by_id(r["id"])
+                        if em:
+                            st.divider()
+                            _render_email_detail(em, all_tags)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -571,11 +602,7 @@ LIMIT 20"""
                                             "Open email",
                                             key=f"sparql_nav_{row_i}_{col_i}",
                                         ):
-                                            em = indexer.get_email_by_id(email_id)
-                                            if em and em.get("subject"):
-                                                _nav_to_search(em["subject"])
-                                            else:
-                                                _nav_to_search(email_id)
+                                            _nav_to_email(email_id)
                                     elif _is_email_address(val):
                                         if st.button(
                                             "Search sender",
