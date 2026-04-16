@@ -44,26 +44,38 @@ _watcher = _get_watcher(_current_folder())
 # ── Tab-switch helper (must run before tabs are rendered) ─────────────────────
 # When SPARQL navigation buttons set switch_to_search=True, inject JS that
 # clicks the Search tab, then clear the flag so it doesn't fire again.
-if st.session_state.pop("switch_to_search", False):
-    components.html("""
+def _tab_switch_js(tab_label: str) -> str:
+    return f"""
     <script>
-    setTimeout(function () {
+    setTimeout(function () {{
         var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-        for (var i = 0; i < tabs.length; i++) {
-            if (tabs[i].textContent.trim() === "Search") {
-                tabs[i].click();
-                break;
-            }
-        }
-    }, 250);
+        for (var i = 0; i < tabs.length; i++) {{
+            if (tabs[i].textContent.trim() === "{tab_label}") {{
+                tabs[i].click(); break;
+            }}
+        }}
+    }}, 250);
     </script>
-    """, height=0)
+    """
+
+if st.session_state.pop("switch_to_search", False):
+    components.html(_tab_switch_js("Search"), height=0)
+
+if st.session_state.pop("switch_to_tags", False):
+    components.html(_tab_switch_js("Tags"), height=0)
 
 
 def _nav_to_search(query: str) -> None:
     """Set the search query and trigger a tab switch to Search."""
     st.session_state["_nav_query"] = query
     st.session_state["switch_to_search"] = True
+    st.rerun()
+
+
+def _nav_to_tags(tag_name: str) -> None:
+    """Switch to the Tags tab and pre-select a tag in Browse by tag."""
+    st.session_state["_direct_tag_name"] = tag_name
+    st.session_state["switch_to_tags"] = True
     st.rerun()
 
 
@@ -397,9 +409,17 @@ with tab_tags:
         st.subheader("Browse by tag")
 
         tag_name_map = {t["name"]: t["id"] for t in all_tags}
+
+        # Pre-select a tag when navigating here from the Knowledge Graph
+        _direct_tag = st.session_state.pop("_direct_tag_name", None)
+        _default_tag_idx = 0
+        if _direct_tag and _direct_tag in tag_name_map:
+            _default_tag_idx = list(tag_name_map.keys()).index(_direct_tag)
+
         chosen_tag = st.selectbox(
             "Select tag",
             options=list(tag_name_map.keys()),
+            index=_default_tag_idx,
             key="browse_tag_select",
         )
         if chosen_tag:
@@ -646,10 +666,60 @@ with tab_graph:
                                 f"{len(nodes)} node(s), {len(edges)} edge(s). "
                                 "Seed nodes are shown larger with a thicker border."
                             )
+                            st.session_state["_graph_rendered_nodes"] = nodes
                         except ImportError:
                             st.error("pyvis not installed. Run: pip install pyvis")
                         except Exception as exc:
                             st.error(f"Render failed: {exc}")
+
+            # ── Navigate from graph nodes ─────────────────────────────────
+            rendered_nodes: list[dict] = st.session_state.get("_graph_rendered_nodes", [])
+            if rendered_nodes:
+                st.divider()
+                with st.expander("Navigate from graph nodes", expanded=False):
+                    st.caption(
+                        "Jump to any node from the last rendered graph. "
+                        "Emails open directly; people, organisations, and locations "
+                        "search by name; tags switch to the Tags tab."
+                    )
+                    by_type: dict[str, list[dict]] = {}
+                    for n in rendered_nodes:
+                        by_type.setdefault(n["type"], []).append(n)
+
+                    _TYPE_ORDER = ["Email", "Person", "Organization", "Tag", "Location", "Thread"]
+                    for tname in _TYPE_ORDER:
+                        group = by_type.get(tname, [])
+                        if not group:
+                            continue
+                        st.write(f"**{tname}s**")
+                        btn_cols = st.columns(min(len(group), 3))
+                        for i, n in enumerate(sorted(group, key=lambda x: x["label"].lower())):
+                            with btn_cols[i % 3]:
+                                if tname == "Email":
+                                    email_id = n["id"].split("#email_", 1)[-1] if "#email_" in n["id"] else None
+                                    if email_id and st.button(
+                                        n["label"] or email_id,
+                                        key=f"gnav_{n['id']}",
+                                        use_container_width=True,
+                                        help="Open this email",
+                                    ):
+                                        _nav_to_email(email_id)
+                                elif tname == "Tag":
+                                    if st.button(
+                                        n["label"],
+                                        key=f"gnav_{n['id']}",
+                                        use_container_width=True,
+                                        help="Browse emails with this tag",
+                                    ):
+                                        _nav_to_tags(n["label"])
+                                else:
+                                    if st.button(
+                                        n["label"],
+                                        key=f"gnav_{n['id']}",
+                                        use_container_width=True,
+                                        help=f"Search for {n['label']}",
+                                    ):
+                                        _nav_to_search(n["label"])
 
             # ── SPARQL ────────────────────────────────────────────────────
             st.divider()
