@@ -106,6 +106,8 @@ def _render_email_detail(em: dict, all_tags: list) -> None:
         if keywords:
             st.write("**Keywords**")
             st.write(", ".join(keywords))
+        elif not nlp_engine.NLP_AVAILABLE():
+            st.caption("Keywords unavailable — spaCy model not installed.")
 
     st.divider()
     st.write("**Tags**")
@@ -155,6 +157,16 @@ with st.sidebar:
     total = indexer.get_email_count()
     st.metric("Emails indexed", total)
     st.caption(f"Watcher: {_watcher.status}")
+
+    _nlp_ok = nlp_engine.NLP_AVAILABLE()
+    _sem_ok = semantic_search.SEMANTIC_AVAILABLE
+    if not _nlp_ok or not _sem_ok:
+        st.divider()
+        st.caption("**NLP status**")
+        if not _nlp_ok:
+            st.warning("spaCy model not found — keywords and NER disabled.")
+        if not _sem_ok:
+            st.warning("sentence-transformers not installed — semantic search and NLP tagging disabled.")
 
     st.divider()
     tag_counts = tagger.get_tag_counts()
