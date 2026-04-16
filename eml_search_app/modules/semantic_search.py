@@ -1,18 +1,31 @@
-"""Semantic search using sentence-transformers (offline after first download)."""
+"""Semantic search using sentence-transformers (offline after first download).
+
+If sentence-transformers (or its dependencies, e.g. torch) cannot be imported
+— e.g. on Python 3.14+ where wheels aren't available yet — SEMANTIC_AVAILABLE
+is set to False and all public functions return empty results silently.
+"""
 from typing import Optional
 
 import numpy as np
 
 import config
 
+try:
+    from sentence_transformers import SentenceTransformer as _SentenceTransformer
+    SEMANTIC_AVAILABLE = True
+except Exception:
+    _SentenceTransformer = None  # type: ignore[assignment,misc]
+    SEMANTIC_AVAILABLE = False
+
 _model = None
 
 
 def _load_model():
     global _model
+    if not SEMANTIC_AVAILABLE:
+        raise RuntimeError("sentence-transformers is not installed")
     if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+        _model = _SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
     return _model
 
 
@@ -52,6 +65,8 @@ def cosine_search(
 
 
 def is_model_available() -> bool:
+    if not SEMANTIC_AVAILABLE:
+        return False
     try:
         _load_model()
         return True

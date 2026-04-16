@@ -74,7 +74,19 @@ def download_spacy_model() -> None:
 
 def download_sentence_transformer() -> None:
     print(f"[2/4] Loading sentence-transformer '{config.SENTENCE_TRANSFORMER_MODEL}'…")
-    from sentence_transformers import SentenceTransformer
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        print(
+            "      sentence-transformers is not installed (no compatible wheels for this "
+            "Python version). Semantic search and NLP tag classification will be disabled.\n"
+            f"      To install manually later, try:\n"
+            f"        pip install sentence-transformers\n"
+            f"      or download the pre-packaged model from:\n"
+            f"        {SENTENCE_TRANSFORMER_FALLBACK_URL}"
+        )
+        return
+
     try:
         SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
         print("      model cached.")

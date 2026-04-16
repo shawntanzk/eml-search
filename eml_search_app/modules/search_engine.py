@@ -72,7 +72,7 @@ def search(
     if mode in ("fts", "hybrid") and query.strip():
         fts_results = indexer.search_fts(query, filters, limit=config.MAX_SEARCH_RESULTS)
 
-    if mode in ("semantic", "hybrid") and query.strip():
+    if mode in ("semantic", "hybrid") and query.strip() and semantic_search.SEMANTIC_AVAILABLE:
         ids, matrix = indexer.get_all_embeddings()
         if len(ids) > 0:
             try:
@@ -88,6 +88,10 @@ def search(
                     sem_results = [(rid, s) for rid, s in sem_results if rid in filtered_ids]
             except Exception:
                 pass
+
+    # If semantic unavailable, treat hybrid/semantic as fts
+    if not semantic_search.SEMANTIC_AVAILABLE and mode in ("semantic", "hybrid"):
+        mode = "fts"
 
     if mode == "fts" or not query.strip():
         if not query.strip():

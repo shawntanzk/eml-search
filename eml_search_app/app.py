@@ -9,7 +9,7 @@ APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
 import config
-from modules import indexer, nlp_engine, search_engine, tagger
+from modules import indexer, nlp_engine, search_engine, semantic_search, tagger
 from modules.watcher import EmailWatcher
 from modules.graph_builder import (
     build_abox, save_abox, load_abox, get_merged_graph,
@@ -220,8 +220,9 @@ with tab_search:
                 key="search_query",
             )
         with col_mode:
+            _modes = ["hybrid", "fts", "semantic"] if semantic_search.SEMANTIC_AVAILABLE else ["fts"]
             mode = st.selectbox(
-                "Mode", ["hybrid", "fts", "semantic"],
+                "Mode", _modes,
                 label_visibility="collapsed",
                 key="search_mode",
             )
@@ -321,7 +322,13 @@ with tab_tags:
         "being re-added by NLP for that email."
     )
 
-    if not all_tags:
+    if not semantic_search.SEMANTIC_AVAILABLE:
+        st.warning(
+            "NLP classification is unavailable — `sentence-transformers` could not be "
+            "imported (no compatible wheels for this Python version). "
+            "FTS search still works normally."
+        )
+    elif not all_tags:
         st.warning("Add at least one tag above before running classification.")
     else:
         threshold = st.slider(

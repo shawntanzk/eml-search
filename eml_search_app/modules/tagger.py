@@ -119,6 +119,9 @@ def classify_emails_nlp(threshold: float = 0.25) -> dict:
 
     Returns a summary dict with 'new_assignments' and 'emails_affected'.
     """
+    if not semantic_search.SEMANTIC_AVAILABLE:
+        return {"new_assignments": 0, "emails_affected": 0, "unavailable": True}
+
     tags = get_all_tags()
     if not tags:
         return {"new_assignments": 0, "emails_affected": 0}
