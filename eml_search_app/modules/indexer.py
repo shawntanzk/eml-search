@@ -186,6 +186,10 @@ def get_email_count() -> int:
     return _get_conn().execute("SELECT COUNT(*) FROM emails").fetchone()[0]
 
 
+def get_embedding_count() -> int:
+    return _get_conn().execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+
+
 def get_all_email_ids() -> list[str]:
     rows = _get_conn().execute("SELECT id FROM emails").fetchall()
     return [r["id"] for r in rows]

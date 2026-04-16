@@ -18,13 +18,20 @@ except Exception:
     SEMANTIC_AVAILABLE = False
 
 _model = None
+_model_load_attempted = False
+_model_error: str | None = None
 
 
 def _load_model():
-    global _model
+    global _model, _model_load_attempted, _model_error
     if not SEMANTIC_AVAILABLE:
         raise RuntimeError("sentence-transformers is not installed")
-    if _model is None:
+    if _model_load_attempted:
+        if _model is None:
+            raise RuntimeError(_model_error or "model failed to load")
+        return _model
+    _model_load_attempted = True
+    try:
         # Prefer local cache to avoid SSL errors on cert-restricted machines
         try:
             _model = _SentenceTransformer(
@@ -32,7 +39,30 @@ def _load_model():
             )
         except Exception:
             _model = _SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+    except Exception as exc:
+        _model = None
+        _model_error = f"{type(exc).__name__}: {exc}"
+        raise
     return _model
+
+
+def model_status() -> tuple[bool, str | None]:
+    """
+    Returns (ok, error_message).
+    ok=True means the model loaded successfully.
+    ok=False means either the package is missing or the model failed to load,
+    with error_message explaining why.
+    """
+    if not SEMANTIC_AVAILABLE:
+        return False, "sentence-transformers package is not installed"
+    if not _model_load_attempted:
+        try:
+            _load_model()
+        except Exception:
+            pass
+    if _model is not None:
+        return True, None
+    return False, _model_error
 
 
 def embed_text(text: str) -> np.ndarray:

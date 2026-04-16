@@ -171,15 +171,26 @@ with st.sidebar:
     st.metric("Emails indexed", total)
     st.caption(f"Watcher: {_watcher.status}")
 
-    _nlp_ok = nlp_engine.NLP_AVAILABLE()
-    _sem_ok = semantic_search.SEMANTIC_AVAILABLE
-    if not _nlp_ok or not _sem_ok:
-        st.divider()
-        st.caption("**NLP status**")
-        if not _nlp_ok:
-            st.warning(f"spaCy model unavailable — keywords and NER disabled.\n\n`{nlp_engine.NLP_ERROR()}`")
-        if not _sem_ok:
-            st.warning("sentence-transformers not installed — semantic search and NLP tagging disabled.")
+    st.divider()
+    with st.expander("NLP diagnostics", expanded=False):
+        _nlp_ok = nlp_engine.NLP_AVAILABLE()
+        _sem_ok, _sem_err = semantic_search.model_status()
+        _total = indexer.get_email_count()
+        _embedded = indexer.get_embedding_count()
+
+        if _nlp_ok:
+            st.success("spaCy model loaded")
+        else:
+            st.error(f"spaCy: {nlp_engine.NLP_ERROR()}")
+
+        if _sem_ok:
+            st.success(f"Sentence-transformer loaded")
+            if _embedded < _total:
+                st.warning(f"Embeddings: {_embedded}/{_total} — {_total - _embedded} email(s) missing. Re-index to fill gaps.")
+            else:
+                st.success(f"Embeddings: {_embedded}/{_total}")
+        else:
+            st.error(f"Sentence-transformer: {_sem_err}")
 
     st.divider()
     tag_counts = tagger.get_tag_counts()
@@ -245,7 +256,7 @@ with tab_search:
                 key="search_query",
             )
         with col_mode:
-            _modes = ["hybrid", "fts", "semantic"] if semantic_search.SEMANTIC_AVAILABLE else ["fts"]
+            _modes = ["hybrid", "fts", "semantic"] if semantic_search.model_status()[0] else ["fts"]
             mode = st.selectbox(
                 "Mode", _modes,
                 label_visibility="collapsed",
@@ -350,7 +361,7 @@ with tab_tags:
         st.warning("Add at least one tag above before running classification.")
     else:
         _method_options = []
-        if semantic_search.SEMANTIC_AVAILABLE:
+        if semantic_search.model_status()[0]:
             _method_options.append("Semantic (sentence-transformers)")
         _method_options.append("TF-IDF (no ML dependencies)")
 
