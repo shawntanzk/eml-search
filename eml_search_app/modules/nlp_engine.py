@@ -97,6 +97,41 @@ _load_attempted = False
 _load_error: str | None = None
 
 
+def _find_spacy_model_path(model_name: str):
+    """
+    Locate the model data directory directly in site-packages.
+    Used as a fallback when spacy.load(model_name) fails because the
+    package was manually extracted without pip (no .dist-info present).
+
+    Looks for:  <site-packages>/<model_name>/<model_name>-<version>/
+    """
+    import site
+    from pathlib import Path
+
+    candidates = []
+    try:
+        candidates += site.getsitepackages()
+    except AttributeError:
+        pass
+    try:
+        candidates.append(site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    for sp in candidates:
+        pkg_dir = Path(sp) / model_name
+        if not pkg_dir.is_dir():
+            continue
+        # The model data lives in a versioned subdirectory, e.g. en_core_web_sm-3.8.0/
+        versioned = sorted(pkg_dir.glob(f"{model_name}-*"), reverse=True)
+        if versioned:
+            return str(versioned[0])
+        # Fallback: the package dir itself might be the model dir
+        if (pkg_dir / "config.cfg").exists():
+            return str(pkg_dir)
+    return None
+
+
 def _load_spacy():
     global _nlp, _load_attempted, _load_error
     if _load_attempted:
@@ -104,7 +139,17 @@ def _load_spacy():
     _load_attempted = True
     try:
         import spacy
-        _nlp = spacy.load(config.SPACY_MODEL, disable=["parser"])
+        # First try the normal package import
+        try:
+            _nlp = spacy.load(config.SPACY_MODEL, disable=["parser"])
+        except OSError:
+            # Package import failed (likely no .dist-info from manual tarball extraction).
+            # Try loading directly from the model data directory in site-packages.
+            model_path = _find_spacy_model_path(config.SPACY_MODEL)
+            if model_path:
+                _nlp = spacy.load(model_path, disable=["parser"])
+            else:
+                raise
     except Exception as exc:
         _nlp = None
         _load_error = f"{type(exc).__name__}: {exc}"
