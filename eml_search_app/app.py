@@ -661,8 +661,10 @@ with tab_graph:
 
                             html_path = str(Path(config.DATA_DIR) / "graph_preview.html")
                             net.save_graph(html_path)
-                            html_content = inline_graph_assets(open(html_path).read())
-                            open(html_path, "w").write(html_content)
+                            html_content = inline_graph_assets(
+                                open(html_path, encoding="utf-8").read()
+                            )
+                            open(html_path, "w", encoding="utf-8").write(html_content)
                             components.html(html_content, height=640, scrolling=False)
                             st.caption(
                                 f"{len(nodes)} node(s), {len(edges)} edge(s). "

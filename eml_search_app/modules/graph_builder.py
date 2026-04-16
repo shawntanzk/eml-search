@@ -35,8 +35,8 @@ def inline_graph_assets(html: str) -> str:
     js_candidates  = sorted(pyvis_lib.glob("vis-*/vis-network.min.js"))
     css_candidates = sorted(pyvis_lib.glob("vis-*/vis-network.css"))
 
-    vis_js  = js_candidates[-1].read_text(encoding="utf-8")  if js_candidates  else ""
-    vis_css = css_candidates[-1].read_text(encoding="utf-8") if css_candidates else ""
+    vis_js  = js_candidates[-1].read_text(encoding="utf-8", errors="replace")  if js_candidates  else ""
+    vis_css = css_candidates[-1].read_text(encoding="utf-8", errors="replace") if css_candidates else ""
 
     # Replace vis-network <script src="...cdnjs..."> with inline <script>
     # Lambda replacement prevents re.sub from interpreting backslashes in JS content
