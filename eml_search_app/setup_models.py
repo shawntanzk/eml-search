@@ -87,19 +87,28 @@ def download_sentence_transformer() -> None:
         )
         return
 
+    # Try local cache first (skips any HuggingFace network request)
     try:
-        SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
-        print("      model cached.")
+        SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL, local_files_only=True)
+        print("      model loaded from local cache.")
         return
     except Exception:
         pass
 
-    # Fall back to the GitHub Release bundle (works on cert-restricted machines)
+    # Model not cached — try downloading from HuggingFace
+    try:
+        SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+        print("      model downloaded and cached.")
+        return
+    except Exception:
+        pass
+
+    # HuggingFace unreachable (e.g. SSL error) — use GitHub Release bundle
     print("      HuggingFace download failed — trying GitHub Release fallback…")
     hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
     hf_cache.mkdir(parents=True, exist_ok=True)
     _download_tarball(SENTENCE_TRANSFORMER_FALLBACK_URL, hf_cache)
-    SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+    SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL, local_files_only=True)
     print("      model cached.")
 
 

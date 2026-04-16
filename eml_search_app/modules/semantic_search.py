@@ -25,7 +25,13 @@ def _load_model():
     if not SEMANTIC_AVAILABLE:
         raise RuntimeError("sentence-transformers is not installed")
     if _model is None:
-        _model = _SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+        # Prefer local cache to avoid SSL errors on cert-restricted machines
+        try:
+            _model = _SentenceTransformer(
+                config.SENTENCE_TRANSFORMER_MODEL, local_files_only=True
+            )
+        except Exception:
+            _model = _SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
     return _model
 
 
