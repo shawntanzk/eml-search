@@ -21,9 +21,11 @@ from modules.tfidf_classifier import TFIDFClassifier
 # ── Tag library ──────────────────────────────────────────────────────────────
 
 def get_all_tags() -> list[dict]:
-    """Return all defined tags sorted alphabetically."""
+    """Return all defined tags sorted alphabetically, including per-tag NLP settings."""
     conn = indexer._get_conn()
-    rows = conn.execute("SELECT id, name FROM tags ORDER BY name").fetchall()
+    rows = conn.execute(
+        "SELECT id, name, nlp_method, nlp_threshold FROM tags ORDER BY name"
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -107,11 +109,11 @@ def remove_tag_manual(email_id: str, tag_id: int) -> None:
 
 # ── NLP classification ────────────────────────────────────────────────────────
 
-def classify_emails_nlp(threshold: float = 0.25) -> dict:
+def classify_emails_nlp(threshold: float = 0.25, tags: Optional[list] = None) -> dict:
     """
     Auto-assign tags to emails using sentence-transformer cosine similarity.
 
-    For each tag, embeds the tag name and compares against every email embedding.
+    If `tags` is provided, only those tags are classified; otherwise all tags.
     Assigns the tag (source='nlp') when similarity >= threshold, UNLESS:
       - the email already has that tag (any source), OR
       - a manual block exists for that (email, tag) pair.
@@ -123,7 +125,8 @@ def classify_emails_nlp(threshold: float = 0.25) -> dict:
     if not semantic_search.SEMANTIC_AVAILABLE:
         return {"new_assignments": 0, "emails_affected": 0, "unavailable": True}
 
-    tags = get_all_tags()
+    if tags is None:
+        tags = get_all_tags()
     if not tags:
         return {"new_assignments": 0, "emails_affected": 0}
 
@@ -178,17 +181,18 @@ def classify_emails_nlp(threshold: float = 0.25) -> dict:
     }
 
 
-def classify_emails_tfidf(threshold: float = 0.15) -> dict:
+def classify_emails_tfidf(threshold: float = 0.15, tags: Optional[list] = None) -> dict:
     """
     Auto-assign tags using TF-IDF cosine similarity — no HuggingFace, no spaCy.
 
-    Builds a TF-IDF matrix from all indexed email bodies, then scores each tag
-    name against every email. Assigns the tag (source='nlp') when similarity
-    >= threshold, subject to the same manual-block rules as classify_emails_nlp.
+    If `tags` is provided, only those tags are classified; otherwise all tags.
+    Assigns the tag (source='nlp') when similarity >= threshold, subject to
+    the same manual-block rules as classify_emails_nlp.
 
     Returns a summary dict with 'new_assignments' and 'emails_affected'.
     """
-    tags = get_all_tags()
+    if tags is None:
+        tags = get_all_tags()
     if not tags:
         return {"new_assignments": 0, "emails_affected": 0}
 
@@ -239,6 +243,64 @@ def classify_emails_tfidf(threshold: float = 0.15) -> dict:
         "new_assignments": len(new_rows),
         "emails_affected": len(affected_emails),
     }
+
+
+def classify_tag(tag_id: int) -> dict:
+    """
+    Classify emails for a single tag using that tag's saved nlp_method and nlp_threshold.
+
+    Returns the same summary dict as classify_emails_nlp / classify_emails_tfidf.
+    """
+    conn = indexer._get_conn()
+    row = conn.execute(
+        "SELECT id, name, nlp_method, nlp_threshold FROM tags WHERE id = ?", (tag_id,)
+    ).fetchone()
+    if not row:
+        return {"new_assignments": 0, "emails_affected": 0}
+
+    tag = dict(row)
+    method = tag.get("nlp_method") or "tfidf"
+    threshold = tag.get("nlp_threshold") or 0.15
+
+    if method == "semantic":
+        return classify_emails_nlp(threshold=threshold, tags=[tag])
+    else:
+        return classify_emails_tfidf(threshold=threshold, tags=[tag])
+
+
+def classify_all_tags() -> dict:
+    """
+    Classify all tags, each using its own saved nlp_method and nlp_threshold.
+
+    Returns a combined summary dict.
+    """
+    tags = get_all_tags()
+    total_new = 0
+    total_affected: set[str] = set()
+
+    # Partition tags by method so we can batch TF-IDF (builds corpus once)
+    semantic_tags = [t for t in tags if (t.get("nlp_method") or "tfidf") == "semantic"]
+    tfidf_tags = [t for t in tags if (t.get("nlp_method") or "tfidf") != "semantic"]
+
+    # Group semantic tags by threshold so each group uses a single classify call
+    from collections import defaultdict
+    semantic_by_threshold: dict[float, list] = defaultdict(list)
+    for t in semantic_tags:
+        semantic_by_threshold[t["nlp_threshold"]].append(t)
+
+    tfidf_by_threshold: dict[float, list] = defaultdict(list)
+    for t in tfidf_tags:
+        tfidf_by_threshold[t["nlp_threshold"]].append(t)
+
+    for threshold, group in semantic_by_threshold.items():
+        r = classify_emails_nlp(threshold=threshold, tags=group)
+        total_new += r.get("new_assignments", 0)
+
+    for threshold, group in tfidf_by_threshold.items():
+        r = classify_emails_tfidf(threshold=threshold, tags=group)
+        total_new += r.get("new_assignments", 0)
+
+    return {"new_assignments": total_new}
 
 
 def get_emails_by_tag(tag_id: int, limit: int = 200) -> list[dict]:

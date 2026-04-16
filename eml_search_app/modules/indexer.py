@@ -108,7 +108,16 @@ def init_db() -> None:
             value TEXT
         );
     """)
-    conn.commit()
+    # Idempotent schema migrations — add per-tag NLP settings columns if absent
+    for col, definition in [
+        ("nlp_method", "TEXT NOT NULL DEFAULT 'tfidf'"),
+        ("nlp_threshold", "REAL NOT NULL DEFAULT 0.15"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE tags ADD COLUMN {col} {definition}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
 
 def is_indexed(file_path: str) -> bool:
@@ -305,3 +314,24 @@ def get_unindexed_files(folder: str) -> list[str]:
         for p in Path(folder).rglob("*.eml")
         if str(p.resolve()) not in indexed
     ]
+
+
+def get_tag_nlp_settings(tag_id: int) -> dict:
+    """Return the nlp_method and nlp_threshold for a tag (with defaults)."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT nlp_method, nlp_threshold FROM tags WHERE id = ?", (tag_id,)
+    ).fetchone()
+    if row:
+        return {"nlp_method": row["nlp_method"], "nlp_threshold": row["nlp_threshold"]}
+    return {"nlp_method": "tfidf", "nlp_threshold": 0.15}
+
+
+def save_tag_nlp_settings(tag_id: int, method: str, threshold: float) -> None:
+    """Persist per-tag NLP classification method and threshold."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE tags SET nlp_method = ?, nlp_threshold = ? WHERE id = ?",
+        (method, threshold, tag_id),
+    )
+    conn.commit()

@@ -367,6 +367,7 @@ with tab_tags:
     st.divider()
     st.subheader("NLP auto-classification")
     st.caption(
+        "Each tag has its own classification method and threshold. "
         "Only **adds** tags — never removes. Manually removed tags are permanently "
         "blocked from being re-added by NLP for that email."
     )
@@ -374,59 +375,83 @@ with tab_tags:
     if not all_tags:
         st.warning("Add at least one tag above before running classification.")
     else:
+        _semantic_ok = semantic_search.model_status()[0]
         _method_options = []
-        if semantic_search.model_status()[0]:
+        if _semantic_ok:
             _method_options.append("Semantic (sentence-transformers)")
         _method_options.append("TF-IDF (no ML dependencies)")
 
-        nlp_method = st.radio(
-            "Classification method",
-            _method_options,
-            key="nlp_method",
-            help=(
-                "**Semantic**: uses sentence-transformer embeddings — more accurate but "
-                "requires sentence-transformers to be installed.\n\n"
-                "**TF-IDF**: pure keyword frequency matching — works on any Python version "
-                "with no extra dependencies."
-            ),
-        )
-
-        _use_tfidf = nlp_method.startswith("TF-IDF")
-        _default_threshold = 0.15 if _use_tfidf else 0.25
-        _max_threshold = 0.50 if _use_tfidf else 0.60
-
-        if _use_tfidf:
-            st.caption(
-                "Scores each tag name against email bodies using TF-IDF cosine similarity. "
-                "No internet connection or ML models required."
-            )
-        else:
-            st.caption(
-                "Scores each tag name against email embeddings using sentence-transformer "
-                "cosine similarity."
-            )
-
-        threshold = st.slider(
-            "Similarity threshold",
-            min_value=0.05,
-            max_value=_max_threshold,
-            value=_default_threshold,
-            step=0.05,
-            key="nlp_threshold",
-            help="Higher = fewer but more confident assignments. Lower = more assignments.",
-        )
-
-        if st.button("Classify emails", type="primary", key="run_nlp"):
-            with st.spinner("Classifying…"):
-                if _use_tfidf:
-                    result = tagger.classify_emails_tfidf(threshold=threshold)
-                else:
-                    result = tagger.classify_emails_nlp(threshold=threshold)
+        # "Classify all tags" button at the top
+        if st.button("Classify all tags", type="primary", key="run_nlp_all"):
+            with st.spinner("Classifying all tags…"):
+                result = tagger.classify_all_tags()
             st.success(
-                f"Done — **{result['new_assignments']}** new tag assignment(s) "
-                f"across **{result['emails_affected']}** email(s)."
+                f"Done — **{result['new_assignments']}** new tag assignment(s)."
             )
             st.rerun()
+
+        st.write("**Per-tag settings**")
+
+        for _tag in all_tags:
+            _tid = _tag["id"]
+            _saved_method = _tag.get("nlp_method") or "tfidf"
+            _saved_threshold = _tag.get("nlp_threshold") or 0.15
+
+            # Map DB value → display label
+            if _saved_method == "semantic" and _semantic_ok:
+                _method_idx = 0
+            else:
+                _method_idx = len(_method_options) - 1  # TF-IDF is always last
+
+            with st.expander(f"🏷 {_tag['name']}", expanded=False):
+                _m_col, _t_col, _btn_col = st.columns([3, 3, 2])
+
+                with _m_col:
+                    _chosen_method_label = st.radio(
+                        "Method",
+                        _method_options,
+                        index=_method_idx,
+                        key=f"tag_method_{_tid}",
+                        horizontal=True,
+                    )
+
+                _use_tfidf_tag = _chosen_method_label.startswith("TF-IDF")
+                _db_method = "tfidf" if _use_tfidf_tag else "semantic"
+                _default_thresh = 0.15 if _use_tfidf_tag else 0.25
+                _max_thresh = 0.50 if _use_tfidf_tag else 0.60
+                # Clamp saved threshold into the current method's range
+                _init_thresh = float(
+                    max(0.05, min(_saved_threshold, _max_thresh))
+                    if _saved_method == _db_method
+                    else _default_thresh
+                )
+
+                with _t_col:
+                    _chosen_threshold = st.slider(
+                        "Threshold",
+                        min_value=0.05,
+                        max_value=_max_thresh,
+                        value=_init_thresh,
+                        step=0.05,
+                        key=f"tag_threshold_{_tid}",
+                        help="Higher = fewer but more confident assignments.",
+                    )
+
+                # Persist settings whenever they change
+                if _db_method != _saved_method or abs(_chosen_threshold - _saved_threshold) > 1e-6:
+                    indexer.save_tag_nlp_settings(_tid, _db_method, _chosen_threshold)
+
+                with _btn_col:
+                    st.write("")  # vertical alignment nudge
+                    if st.button("Classify", key=f"run_nlp_{_tid}"):
+                        # Save current UI values before classifying
+                        indexer.save_tag_nlp_settings(_tid, _db_method, _chosen_threshold)
+                        with st.spinner(f"Classifying '{_tag['name']}'…"):
+                            _result = tagger.classify_tag(_tid)
+                        st.success(
+                            f"**{_result['new_assignments']}** new assignment(s)."
+                        )
+                        st.rerun()
 
     # ── Browse by tag ─────────────────────────────────────────────────────────
     if all_tags:
