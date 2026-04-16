@@ -492,11 +492,15 @@ with tab_graph:
             st.divider()
             st.subheader("Interactive graph")
             st.caption(
-                "Select seed nodes to visualise. The graph will include those nodes "
-                "and every directly connected neighbour of the selected types."
+                "Search for nodes and add them as seeds one at a time. "
+                "The graph shows each seed and its directly connected neighbours."
             )
 
             all_nodes = get_all_graph_nodes(abox)
+
+            # Persistent seed set: {label: uri}
+            if "_graph_seeds" not in st.session_state:
+                st.session_state._graph_seeds = {}
 
             # Type filter checkboxes
             type_names = ["Email", "Person", "Organization", "Tag", "Thread", "Location"]
@@ -507,33 +511,57 @@ with tab_graph:
                     if st.checkbox(tname, value=True, key=f"gt_{tname}"):
                         allowed_types.add(tname)
 
-            # Search box to narrow the multiselect
-            node_search = st.text_input(
-                "Filter nodes by name",
-                placeholder="Type to search…",
-                key="node_search",
-            )
-
+            # Search + add
+            search_col, add_col = st.columns([4, 1])
+            with search_col:
+                node_search = st.text_input(
+                    "Search nodes",
+                    placeholder="Type a name to search…",
+                    key="node_search",
+                    label_visibility="collapsed",
+                )
             filtered = [
                 n for n in all_nodes
                 if (not node_search or node_search.lower() in n["label"].lower())
                 and n["type"] in allowed_types
             ]
-
             option_labels = [f"[{n['type']}] {n['label']}" for n in filtered]
-            label_to_uri  = {f"[{n['type']}] {n['label']}": n["uri"] for n in filtered}
+            label_to_uri  = {f"[{n['type']}] {n['label']}": n["uri"] for n in all_nodes}
 
-            selected_labels = st.multiselect(
-                f"Seed nodes ({len(filtered)} shown)",
-                options=option_labels,
-                key="selected_graph_nodes",
+            pick = st.selectbox(
+                f"Matching nodes ({len(filtered)} found)",
+                options=[""] + option_labels,
+                key="node_pick",
+                label_visibility="collapsed",
             )
+            with add_col:
+                if st.button("Add seed", key="add_seed", disabled=not pick):
+                    st.session_state._graph_seeds[pick] = label_to_uri[pick]
+                    st.rerun()
+
+            # Show selected seeds with remove buttons
+            seeds: dict = st.session_state._graph_seeds
+            if seeds:
+                st.write("**Selected seeds:**")
+                seed_cols = st.columns(min(len(seeds), 4))
+                for i, label in enumerate(list(seeds)):
+                    with seed_cols[i % 4]:
+                        if st.button(f"✕ {label}", key=f"rm_seed_{i}", help="Remove this seed"):
+                            del st.session_state._graph_seeds[label]
+                            st.rerun()
+                if st.button("Clear all seeds", key="clear_seeds"):
+                    st.session_state._graph_seeds = {}
+                    st.rerun()
+            else:
+                st.info("Search for a node above and click **Add seed** to start.")
+
+            selected_labels = list(seeds.keys())
 
             if not selected_labels:
-                st.info("Select at least one seed node above to render the graph.")
+                pass
             else:
                 if st.button("Render graph", type="primary", key="render_graph"):
-                    seed_uris = [label_to_uri[l] for l in selected_labels]
+                    seed_uris = list(seeds.values())
                     with st.spinner("Rendering…"):
                         try:
                             from pyvis.network import Network
