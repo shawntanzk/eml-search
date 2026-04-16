@@ -15,6 +15,7 @@ from typing import Optional
 import numpy as np
 
 from modules import indexer, semantic_search
+from modules.tfidf_classifier import TFIDFClassifier
 
 
 # ── Tag library ──────────────────────────────────────────────────────────────
@@ -162,6 +163,69 @@ def classify_emails_nlp(threshold: float = 0.25) -> dict:
                 continue
             new_rows.append((email_id, tag["id"], "nlp"))
             existing.add(key)  # prevent duplicates within this run
+            affected_emails.add(email_id)
+
+    if new_rows:
+        conn.executemany(
+            "INSERT OR IGNORE INTO email_tags (email_id, tag_id, source) VALUES (?,?,?)",
+            new_rows,
+        )
+        conn.commit()
+
+    return {
+        "new_assignments": len(new_rows),
+        "emails_affected": len(affected_emails),
+    }
+
+
+def classify_emails_tfidf(threshold: float = 0.15) -> dict:
+    """
+    Auto-assign tags using TF-IDF cosine similarity — no HuggingFace, no spaCy.
+
+    Builds a TF-IDF matrix from all indexed email bodies, then scores each tag
+    name against every email. Assigns the tag (source='nlp') when similarity
+    >= threshold, subject to the same manual-block rules as classify_emails_nlp.
+
+    Returns a summary dict with 'new_assignments' and 'emails_affected'.
+    """
+    tags = get_all_tags()
+    if not tags:
+        return {"new_assignments": 0, "emails_affected": 0}
+
+    conn = indexer._get_conn()
+    rows = conn.execute(
+        "SELECT id, body_text FROM emails WHERE body_text IS NOT NULL AND body_text != ''"
+    ).fetchall()
+    if not rows:
+        return {"new_assignments": 0, "emails_affected": 0}
+
+    email_ids = [r["id"] for r in rows]
+    bodies = [r["body_text"] for r in rows]
+
+    classifier = TFIDFClassifier(bodies)
+
+    existing: set[tuple[str, int]] = set(
+        (r[0], r[1])
+        for r in conn.execute("SELECT email_id, tag_id FROM email_tags").fetchall()
+    )
+    blocked: set[tuple[str, int]] = set(
+        (r[0], r[1])
+        for r in conn.execute("SELECT email_id, tag_id FROM email_tag_blocks").fetchall()
+    )
+
+    new_rows: list[tuple[str, int, str]] = []
+    affected_emails: set[str] = set()
+
+    for tag in tags:
+        scores = classifier.score(tag["name"])
+        for email_id, score in zip(email_ids, scores):
+            if float(score) < threshold:
+                continue
+            key = (email_id, tag["id"])
+            if key in existing or key in blocked:
+                continue
+            new_rows.append((email_id, tag["id"], "nlp"))
+            existing.add(key)
             affected_emails.add(email_id)
 
     if new_rows:

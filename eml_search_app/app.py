@@ -329,33 +329,61 @@ with tab_tags:
     st.divider()
     st.subheader("NLP auto-classification")
     st.caption(
-        "Uses sentence-transformer cosine similarity to match tag names against email content. "
-        "Only **adds** tags — never removes. Manually removed tags are permanently blocked from "
-        "being re-added by NLP for that email."
+        "Only **adds** tags — never removes. Manually removed tags are permanently "
+        "blocked from being re-added by NLP for that email."
     )
 
-    if not semantic_search.SEMANTIC_AVAILABLE:
-        st.warning(
-            "NLP classification is unavailable — `sentence-transformers` could not be "
-            "imported (no compatible wheels for this Python version). "
-            "FTS search still works normally."
-        )
-    elif not all_tags:
+    if not all_tags:
         st.warning("Add at least one tag above before running classification.")
     else:
+        _method_options = []
+        if semantic_search.SEMANTIC_AVAILABLE:
+            _method_options.append("Semantic (sentence-transformers)")
+        _method_options.append("TF-IDF (no ML dependencies)")
+
+        nlp_method = st.radio(
+            "Classification method",
+            _method_options,
+            key="nlp_method",
+            help=(
+                "**Semantic**: uses sentence-transformer embeddings — more accurate but "
+                "requires sentence-transformers to be installed.\n\n"
+                "**TF-IDF**: pure keyword frequency matching — works on any Python version "
+                "with no extra dependencies."
+            ),
+        )
+
+        _use_tfidf = nlp_method.startswith("TF-IDF")
+        _default_threshold = 0.15 if _use_tfidf else 0.25
+        _max_threshold = 0.50 if _use_tfidf else 0.60
+
+        if _use_tfidf:
+            st.caption(
+                "Scores each tag name against email bodies using TF-IDF cosine similarity. "
+                "No internet connection or ML models required."
+            )
+        else:
+            st.caption(
+                "Scores each tag name against email embeddings using sentence-transformer "
+                "cosine similarity."
+            )
+
         threshold = st.slider(
             "Similarity threshold",
-            min_value=0.10,
-            max_value=0.60,
-            value=0.25,
+            min_value=0.05,
+            max_value=_max_threshold,
+            value=_default_threshold,
             step=0.05,
             key="nlp_threshold",
             help="Higher = fewer but more confident assignments. Lower = more assignments.",
         )
 
-        if st.button("Classify emails with NLP", type="primary", key="run_nlp"):
+        if st.button("Classify emails", type="primary", key="run_nlp"):
             with st.spinner("Classifying…"):
-                result = tagger.classify_emails_nlp(threshold=threshold)
+                if _use_tfidf:
+                    result = tagger.classify_emails_tfidf(threshold=threshold)
+                else:
+                    result = tagger.classify_emails_nlp(threshold=threshold)
             st.success(
                 f"Done — **{result['new_assignments']}** new tag assignment(s) "
                 f"across **{result['emails_affected']}** email(s)."
