@@ -177,7 +177,7 @@ with st.sidebar:
         st.divider()
         st.caption("**NLP status**")
         if not _nlp_ok:
-            st.warning("spaCy model not found — keywords and NER disabled.")
+            st.warning(f"spaCy model unavailable — keywords and NER disabled.\n\n`{nlp_engine.NLP_ERROR()}`")
         if not _sem_ok:
             st.warning("sentence-transformers not installed — semantic search and NLP tagging disabled.")
 

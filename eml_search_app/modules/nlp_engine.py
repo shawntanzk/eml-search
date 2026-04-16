@@ -94,23 +94,31 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 _nlp = None
 _load_attempted = False
+_load_error: str | None = None
 
 
 def _load_spacy():
-    global _nlp, _load_attempted
+    global _nlp, _load_attempted, _load_error
     if _load_attempted:
         return _nlp  # None means unavailable — don't retry
     _load_attempted = True
     try:
         import spacy
         _nlp = spacy.load(config.SPACY_MODEL, disable=["parser"])
-    except Exception:
+    except Exception as exc:
         _nlp = None
+        _load_error = f"{type(exc).__name__}: {exc}"
     return _nlp
 
 
 def NLP_AVAILABLE() -> bool:
     return _load_spacy() is not None
+
+
+def NLP_ERROR() -> str | None:
+    """Return the exception message from the last failed spaCy load, or None if loaded OK."""
+    _load_spacy()  # ensure load has been attempted
+    return _load_error
 
 
 def extract_entities(text: str) -> list[dict]:
