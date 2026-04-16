@@ -8,6 +8,7 @@ touching the data graph.
 import hashlib
 import json
 import re
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -286,6 +287,104 @@ def get_subgraph(
                 tname, _ = _get_node_type_and_color(g, s)
                 if tname in allowed_types:
                     include_uris.add(str(s))
+
+    nodes: list[dict] = []
+    for uid in include_uris:
+        uri = URIRef(uid)
+        tname, tcolor = _get_node_type_and_color(g, uri)
+        nodes.append({
+            "id":    uid,
+            "label": _get_label(g, uri),
+            "color": tcolor,
+            "type":  tname,
+        })
+
+    edges: list[dict] = []
+    for s, p, o in g:
+        if p not in INTERESTING_PROPS or not isinstance(o, URIRef):
+            continue
+        sid, oid = str(s), str(o)
+        if sid in include_uris and oid in include_uris:
+            edges.append({
+                "from":  sid,
+                "to":    oid,
+                "label": str(p).split("#")[-1],
+            })
+
+    return nodes, edges
+
+
+def _bfs_distances(
+    adj: dict[str, set[str]],
+    source: str,
+    max_hops: int,
+) -> dict[str, int]:
+    """BFS from source; returns {node: distance} for all reachable nodes within max_hops."""
+    dist: dict[str, int] = {source: 0}
+    queue: deque[str] = deque([source])
+    while queue:
+        node = queue.popleft()
+        d = dist[node]
+        if d >= max_hops:
+            continue
+        for nb in adj.get(node, set()):
+            if nb not in dist:
+                dist[nb] = d + 1
+                queue.append(nb)
+    return dist
+
+
+def get_paths_between_seeds(
+    g: Graph,
+    seed_uris: list[str],
+    allowed_types: set[str],
+    max_hops: int = 3,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Return (nodes, edges) for all nodes that lie on a path of length <= max_hops
+    between any pair of seed nodes.
+
+    A node v lies on a path from s1 → s2 when:
+        dist(s1, v) + dist(s2, v) <= max_hops
+
+    The graph is treated as undirected for path finding; original edge direction
+    is preserved in the returned edges. Seeds are always included even if no
+    path is found. Only nodes whose type is in allowed_types are kept as
+    intermediates (seeds bypass the type filter).
+    """
+    if len(seed_uris) < 2:
+        return get_subgraph(g, seed_uris, allowed_types)
+
+    # Build bidirectional adjacency list restricted to interesting props
+    adj: dict[str, set[str]] = {}
+    for s, p, o in g:
+        if p not in INTERESTING_PROPS or not isinstance(o, URIRef):
+            continue
+        sid, oid = str(s), str(o)
+        adj.setdefault(sid, set()).add(oid)
+        adj.setdefault(oid, set()).add(sid)
+
+    seed_set = set(seed_uris)
+
+    # BFS distances from every seed
+    all_dists: list[dict[str, int]] = [
+        _bfs_distances(adj, s, max_hops) for s in seed_uris
+    ]
+
+    # Collect nodes on any path between any pair of seeds
+    include_uris: set[str] = set(seed_set)
+    for i in range(len(seed_uris)):
+        for j in range(i + 1, len(seed_uris)):
+            di, dj = all_dists[i], all_dists[j]
+            for node in set(di) | set(dj):
+                if di.get(node, max_hops + 1) + dj.get(node, max_hops + 1) <= max_hops:
+                    # Apply type filter for intermediate nodes; seeds always pass
+                    if node in seed_set:
+                        include_uris.add(node)
+                    else:
+                        tname, _ = _get_node_type_and_color(g, URIRef(node))
+                        if tname in allowed_types:
+                            include_uris.add(node)
 
     nodes: list[dict] = []
     for uid in include_uris:

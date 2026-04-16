@@ -14,6 +14,7 @@ from modules.watcher import EmailWatcher
 from modules.graph_builder import (
     build_abox, save_abox, load_abox, get_merged_graph,
     sparql_query, get_graph_stats, get_all_graph_nodes, get_subgraph,
+    get_paths_between_seeds,
 )
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -560,13 +561,49 @@ with tab_graph:
             if not selected_labels:
                 pass
             else:
+                # ── Render mode ───────────────────────────────────────────
+                st.divider()
+                _has_multi_seeds = len(selected_labels) >= 2
+                render_mode = st.radio(
+                    "Render mode",
+                    ["Neighbourhood", "Paths between seeds"],
+                    key="render_mode",
+                    horizontal=True,
+                    help=(
+                        "**Neighbourhood**: show each seed and its direct neighbours.\n\n"
+                        "**Paths between seeds**: show only nodes that lie on a connecting "
+                        "path between any two seeds (multi-hop)."
+                    ),
+                    disabled=not _has_multi_seeds,
+                )
+                if not _has_multi_seeds and render_mode == "Paths between seeds":
+                    render_mode = "Neighbourhood"
+
+                _use_paths = render_mode == "Paths between seeds"
+                if _use_paths:
+                    max_hops = st.slider(
+                        "Max hops",
+                        min_value=1,
+                        max_value=6,
+                        value=3,
+                        key="max_hops",
+                        help="Maximum path length between any two seeds. Higher values reveal longer chains but may add many nodes.",
+                    )
+                else:
+                    max_hops = 1
+
                 if st.button("Render graph", type="primary", key="render_graph"):
                     seed_uris = list(seeds.values())
                     with st.spinner("Rendering…"):
                         try:
                             from pyvis.network import Network
 
-                            nodes, edges = get_subgraph(abox, seed_uris, allowed_types)
+                            if _use_paths:
+                                nodes, edges = get_paths_between_seeds(
+                                    abox, seed_uris, allowed_types, max_hops=max_hops
+                                )
+                            else:
+                                nodes, edges = get_subgraph(abox, seed_uris, allowed_types)
 
                             net = Network(
                                 height="620px", width="100%",
