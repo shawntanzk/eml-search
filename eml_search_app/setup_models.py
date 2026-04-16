@@ -22,23 +22,31 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import config
 
-# Fallback: pre-packaged model hosted on GitHub Releases (bypasses spaCy CDN cert issues)
+# Fallback models hosted on GitHub Releases (bypasses cert-restricted networks)
 SPACY_MODEL_FALLBACK_URL = (
     "https://github.com/shawntanzk/eml-search/releases/download/"
     "models-v1/en_core_web_sm-3.8.0.tar.gz"
 )
+SENTENCE_TRANSFORMER_FALLBACK_URL = (
+    "https://github.com/shawntanzk/eml-search/releases/download/"
+    "models-v1/all-MiniLM-L6-v2.tar.gz"
+)
 
 
-def _install_spacy_model_from_url(url: str) -> None:
-    """Download a packaged spaCy model tarball and install it into site-packages."""
-    import site
-    dest = Path(site.getsitepackages()[0])
+def _download_tarball(url: str, dest: Path) -> None:
+    """Download a tarball from url and extract it into dest."""
     print(f"      downloading from {url} …")
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         urllib.request.urlretrieve(url, tmp.name)
         with tarfile.open(tmp.name, "r:gz") as tf:
             tf.extractall(dest)
     print(f"      installed to {dest}")
+
+
+def _install_spacy_model_from_url(url: str) -> None:
+    """Download a packaged spaCy model tarball and install it into site-packages."""
+    import site
+    _download_tarball(url, Path(site.getsitepackages()[0]))
 
 
 def download_spacy_model() -> None:
@@ -67,6 +75,18 @@ def download_spacy_model() -> None:
 def download_sentence_transformer() -> None:
     print(f"[2/4] Loading sentence-transformer '{config.SENTENCE_TRANSFORMER_MODEL}'…")
     from sentence_transformers import SentenceTransformer
+    try:
+        SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
+        print("      model cached.")
+        return
+    except Exception:
+        pass
+
+    # Fall back to the GitHub Release bundle (works on cert-restricted machines)
+    print("      HuggingFace download failed — trying GitHub Release fallback…")
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+    hf_cache.mkdir(parents=True, exist_ok=True)
+    _download_tarball(SENTENCE_TRANSFORMER_FALLBACK_URL, hf_cache)
     SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL)
     print("      model cached.")
 
