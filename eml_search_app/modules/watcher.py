@@ -75,6 +75,7 @@ class EmailWatcher:
 
                 text = f"{parsed.get('subject', '')} {parsed.get('body_text', '')}"
                 entities = nlp_engine.extract_entities(text)
+                entities += nlp_engine.extract_orgs_from_email_addrs(parsed)
                 if entities:
                     indexer.insert_entities(parsed["id"], entities)
 
@@ -107,6 +108,7 @@ def run_initial_index(folder: str) -> dict:
 
             text = f"{parsed.get('subject', '')} {parsed.get('body_text', '')}"
             entities = nlp_engine.extract_entities(text)
+            entities += nlp_engine.extract_orgs_from_email_addrs(parsed)
             if entities:
                 indexer.insert_entities(parsed["id"], entities)
 

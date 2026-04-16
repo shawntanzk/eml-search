@@ -2,12 +2,93 @@
 
 If the spaCy model is not installed, NLP_AVAILABLE is set to False and all
 public functions return empty results silently rather than raising errors.
+
+extract_orgs_from_email_addrs() is always available — it requires no models.
 """
 import re
 import warnings
 from collections import Counter
 
 import config
+
+# ── Email-based organisation extraction ─────────────────────────────────────
+
+# Domains that belong to free/personal email providers — not organisations.
+_FREE_EMAIL_DOMAINS = frozenset("""
+gmail.com yahoo.com yahoo.co.uk yahoo.com.au hotmail.com hotmail.co.uk
+hotmail.fr outlook.com outlook.co.uk live.com live.co.uk icloud.com
+me.com mac.com aol.com aol.co.uk protonmail.com proton.me tutanota.com
+tutanota.de fastmail.com fastmail.net zoho.com ymail.com msn.com
+googlemail.com mail.com inbox.com gmx.com gmx.net gmx.de web.de
+""".split())
+
+# Country-code second-level domains used before the TLD (e.g. co.uk, com.au)
+_SECOND_LEVEL = frozenset(["co", "com", "org", "net", "gov", "edu", "ac", "sch"])
+
+
+def _domain_to_org_name(domain: str) -> str | None:
+    """
+    Convert an email domain to a human-readable organisation name.
+    Returns None for free providers, IP addresses, or single-label domains.
+
+    Examples
+    --------
+    microsoft.com      → Microsoft
+    acme-corp.co.uk    → Acme Corp
+    sub.bigbank.com    → Bigbank
+    gmail.com          → None
+    """
+    domain = domain.lower().strip()
+    if not domain or domain in _FREE_EMAIL_DOMAINS:
+        return None
+
+    parts = domain.split(".")
+    if len(parts) < 2:
+        return None
+
+    # Determine the registered second-level domain
+    # e.g. acme.co.uk → parts = ["acme","co","uk"] → sld = "acme"
+    if len(parts) >= 3 and parts[-2] in _SECOND_LEVEL:
+        sld = parts[-3]
+    else:
+        sld = parts[-2]
+
+    name = sld.replace("-", " ").replace("_", " ").title()
+    return name if len(name) > 1 else None
+
+
+def extract_orgs_from_email_addrs(parsed: dict) -> list[dict]:
+    """
+    Extract organisation entities from the sender and recipient email addresses
+    in a parsed email dict. Always available — no models required.
+
+    Collects all unique addresses, strips free-provider domains, and returns
+    a list of {text, label} dicts (label = 'ORG') ready for indexer.insert_entities().
+    """
+    addresses: set[str] = set()
+
+    sender = parsed.get("sender_email", "")
+    if sender:
+        addresses.add(sender.lower())
+
+    for field in ("recipients", "cc"):
+        for entry in (parsed.get(field) or []):
+            addr = entry.get("email", "") if isinstance(entry, dict) else ""
+            if addr:
+                addresses.add(addr.lower())
+
+    seen_orgs: set[str] = set()
+    entities: list[dict] = []
+    for addr in addresses:
+        if "@" not in addr:
+            continue
+        domain = addr.split("@", 1)[1]
+        name = _domain_to_org_name(domain)
+        if name and name not in seen_orgs:
+            seen_orgs.add(name)
+            entities.append({"text": name, "label": "ORG"})
+
+    return entities
 
 warnings.filterwarnings("ignore", category=UserWarning)
 

@@ -833,6 +833,19 @@ with tab_settings:
                 st.success(f"Indexed {result['indexed']} new emails ({result['total']} total).")
                 st.rerun()
 
+    if st.button("Backfill organisation entities from email addresses", key="backfill_orgs"):
+        with st.spinner("Extracting organisations from all indexed emails…"):
+            all_ids = indexer.get_all_email_ids()
+            count = 0
+            for eid in all_ids:
+                em = indexer.get_email_by_id(eid)
+                if em:
+                    orgs = nlp_engine.extract_orgs_from_email_addrs(em)
+                    if orgs:
+                        indexer.insert_entities(eid, orgs)
+                        count += 1
+        st.success(f"Done — extracted organisation entities for {count} email(s). Rebuild the graph to see them.")
+
     st.divider()
     st.subheader("Database")
     db_size    = Path(config.DB_PATH).stat().st_size / 1024 if Path(config.DB_PATH).exists() else 0
