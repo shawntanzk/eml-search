@@ -39,17 +39,21 @@ def inline_graph_assets(html: str) -> str:
     vis_css = css_candidates[-1].read_text(encoding="utf-8") if css_candidates else ""
 
     # Replace vis-network <script src="...cdnjs..."> with inline <script>
+    # Lambda replacement prevents re.sub from interpreting backslashes in JS content
+    # as regex backreferences (e.g. \d, \n inside vis-network.min.js would cause errors).
+    js_tag = f"<script>{vis_js}</script>"
     html = re.sub(
         r'<script\b[^>]*cdnjs\.cloudflare\.com[^>]*vis-network[^>]*>\s*</script>',
-        f"<script>{vis_js}</script>",
+        lambda _: js_tag,
         html,
         flags=re.IGNORECASE,
     )
 
     # Replace vis-network <link rel="stylesheet" href="...cdnjs..."> with inline <style>
+    css_tag = f"<style>{vis_css}</style>"
     html = re.sub(
         r'<link\b[^>]*cdnjs\.cloudflare\.com[^>]*vis-network[^>]*/?>',
-        f"<style>{vis_css}</style>",
+        lambda _: css_tag,
         html,
         flags=re.IGNORECASE,
     )
@@ -57,13 +61,13 @@ def inline_graph_assets(html: str) -> str:
     # Remove bootstrap CDN links (JS + CSS) — not needed for graph rendering
     html = re.sub(
         r'<script\b[^>]*cdn\.jsdelivr\.net[^>]*bootstrap[^>]*>\s*</script>',
-        "",
+        lambda _: "",
         html,
         flags=re.IGNORECASE,
     )
     html = re.sub(
         r'<link\b[^>]*cdn\.jsdelivr\.net[^>]*bootstrap[^>]*/?>',
-        "",
+        lambda _: "",
         html,
         flags=re.IGNORECASE,
     )
