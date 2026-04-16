@@ -186,7 +186,21 @@ with st.sidebar:
         if _sem_ok:
             st.success(f"Sentence-transformer loaded")
             if _embedded < _total:
-                st.warning(f"Embeddings: {_embedded}/{_total} — {_total - _embedded} email(s) missing. Re-index to fill gaps.")
+                st.warning(f"Embeddings: {_embedded}/{_total} — {_total - _embedded} email(s) missing.")
+                if st.button("Generate missing embeddings", key="fill_embeddings"):
+                    missing = indexer.get_emails_without_embeddings()
+                    progress = st.progress(0, text="Embedding emails…")
+                    for i, em in enumerate(missing):
+                        try:
+                            text = f"{em.get('subject', '')} {(em.get('body_text') or '')[:400]}"
+                            vec = semantic_search.embed_text(text)
+                            indexer.insert_embedding(em["id"], vec)
+                        except Exception:
+                            pass
+                        progress.progress((i + 1) / len(missing), text=f"Embedding {i + 1}/{len(missing)}…")
+                    progress.empty()
+                    st.success(f"Done — {len(missing)} embedding(s) generated.")
+                    st.rerun()
             else:
                 st.success(f"Embeddings: {_embedded}/{_total}")
         else:
