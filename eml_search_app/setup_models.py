@@ -12,12 +12,33 @@ It will:
 import argparse
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
 from pathlib import Path
 
 # Ensure the app directory is on the path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import config
+
+# Fallback: pre-packaged model hosted on GitHub Releases (bypasses spaCy CDN cert issues)
+SPACY_MODEL_FALLBACK_URL = (
+    "https://github.com/shawntanzk/eml-search/releases/download/"
+    "models-v1/en_core_web_sm-3.8.0.tar.gz"
+)
+
+
+def _install_spacy_model_from_url(url: str) -> None:
+    """Download a packaged spaCy model tarball and install it into site-packages."""
+    import site
+    dest = Path(site.getsitepackages()[0])
+    print(f"      downloading from {url} …")
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+        urllib.request.urlretrieve(url, tmp.name)
+        with tarfile.open(tmp.name, "r:gz") as tf:
+            tf.extractall(dest)
+    print(f"      installed to {dest}")
 
 
 def download_spacy_model() -> None:
@@ -26,11 +47,21 @@ def download_spacy_model() -> None:
         import spacy
         spacy.load(config.SPACY_MODEL)
         print("      already installed.")
+        return
     except OSError:
-        subprocess.run(
-            [sys.executable, "-m", "spacy", "download", config.SPACY_MODEL],
-            check=True,
-        )
+        pass
+
+    # Try the standard spaCy download first
+    result = subprocess.run(
+        [sys.executable, "-m", "spacy", "download", config.SPACY_MODEL],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return
+
+    # Fall back to the GitHub Release bundle (works on cert-restricted machines)
+    print("      spaCy download failed — trying GitHub Release fallback…")
+    _install_spacy_model_from_url(SPACY_MODEL_FALLBACK_URL)
 
 
 def download_sentence_transformer() -> None:
