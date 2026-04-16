@@ -1,4 +1,8 @@
-"""NLP processing: NER via spaCy and keyword extraction."""
+"""NLP processing: NER via spaCy and keyword extraction.
+
+If the spaCy model is not installed, NLP_AVAILABLE is set to False and all
+public functions return empty results silently rather than raising errors.
+"""
 import re
 import warnings
 from collections import Counter
@@ -8,20 +12,24 @@ import config
 warnings.filterwarnings("ignore", category=UserWarning)
 
 _nlp = None
+_load_attempted = False
 
 
 def _load_spacy():
-    global _nlp
-    if _nlp is None:
+    global _nlp, _load_attempted
+    if _load_attempted:
+        return _nlp  # None means unavailable — don't retry
+    _load_attempted = True
+    try:
         import spacy
-        try:
-            _nlp = spacy.load(config.SPACY_MODEL, disable=["parser"])
-        except OSError:
-            raise RuntimeError(
-                f"spaCy model '{config.SPACY_MODEL}' not found. "
-                "Run: python -m spacy download en_core_web_sm"
-            )
+        _nlp = spacy.load(config.SPACY_MODEL, disable=["parser"])
+    except Exception:
+        _nlp = None
     return _nlp
+
+
+def NLP_AVAILABLE() -> bool:
+    return _load_spacy() is not None
 
 
 def extract_entities(text: str) -> list[dict]:
@@ -29,6 +37,8 @@ def extract_entities(text: str) -> list[dict]:
     if not text or not text.strip():
         return []
     nlp = _load_spacy()
+    if nlp is None:
+        return []
     doc = nlp(text[:100_000])
     seen = set()
     entities = []
@@ -46,6 +56,8 @@ def extract_keywords(text: str, top_n: int = 10) -> list[str]:
     if not text or not text.strip():
         return []
     nlp = _load_spacy()
+    if nlp is None:
+        return []
     doc = nlp(text[:5000])
 
     candidates: list[str] = []
