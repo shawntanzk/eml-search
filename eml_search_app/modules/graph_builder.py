@@ -14,6 +14,62 @@ from typing import Optional
 
 from rdflib import Graph, Namespace, URIRef, Literal, RDF, RDFS, OWL, XSD
 
+
+def inline_graph_assets(html: str) -> str:
+    """
+    Replace all CDN references in a pyvis-generated HTML file with inline
+    content sourced from pyvis's own bundled files, so the graph renders
+    fully offline.
+
+    Handles:
+    - vis-network JS  (cdnjs) → inlined from pyvis package
+    - vis-network CSS (cdnjs) → inlined from pyvis package
+    - bootstrap JS/CSS (jsdelivr) → removed (only needed for pyvis UI
+      controls that are not visible in a Streamlit iframe)
+    """
+    import pyvis
+
+    pyvis_lib = Path(pyvis.__file__).parent / "lib"
+
+    # Find the highest-version bundled vis-network files
+    js_candidates  = sorted(pyvis_lib.glob("vis-*/vis-network.min.js"))
+    css_candidates = sorted(pyvis_lib.glob("vis-*/vis-network.css"))
+
+    vis_js  = js_candidates[-1].read_text(encoding="utf-8")  if js_candidates  else ""
+    vis_css = css_candidates[-1].read_text(encoding="utf-8") if css_candidates else ""
+
+    # Replace vis-network <script src="...cdnjs..."> with inline <script>
+    html = re.sub(
+        r'<script\b[^>]*cdnjs\.cloudflare\.com[^>]*vis-network[^>]*>\s*</script>',
+        f"<script>{vis_js}</script>",
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # Replace vis-network <link rel="stylesheet" href="...cdnjs..."> with inline <style>
+    html = re.sub(
+        r'<link\b[^>]*cdnjs\.cloudflare\.com[^>]*vis-network[^>]*/?>',
+        f"<style>{vis_css}</style>",
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # Remove bootstrap CDN links (JS + CSS) — not needed for graph rendering
+    html = re.sub(
+        r'<script\b[^>]*cdn\.jsdelivr\.net[^>]*bootstrap[^>]*>\s*</script>',
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    html = re.sub(
+        r'<link\b[^>]*cdn\.jsdelivr\.net[^>]*bootstrap[^>]*/?>',
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    return html
+
 import config
 
 DATA = Namespace("http://emailsearch.local/data#")

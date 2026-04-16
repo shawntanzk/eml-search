@@ -14,7 +14,7 @@ from modules.watcher import EmailWatcher
 from modules.graph_builder import (
     build_abox, save_abox, load_abox, get_merged_graph,
     sparql_query, get_graph_stats, get_all_graph_nodes, get_subgraph,
-    get_paths_between_seeds,
+    get_paths_between_seeds, inline_graph_assets,
 )
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -661,7 +661,9 @@ with tab_graph:
 
                             html_path = str(Path(config.DATA_DIR) / "graph_preview.html")
                             net.save_graph(html_path)
-                            components.html(open(html_path).read(), height=640, scrolling=False)
+                            html_content = inline_graph_assets(open(html_path).read())
+                            open(html_path, "w").write(html_content)
+                            components.html(html_content, height=640, scrolling=False)
                             st.caption(
                                 f"{len(nodes)} node(s), {len(edges)} edge(s). "
                                 "Seed nodes are shown larger with a thicker border."
