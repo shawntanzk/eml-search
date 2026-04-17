@@ -45,3 +45,5 @@ pip-wheel-metadata/
 # test_emails 
 test_emails/
 
+#data
+data/
