@@ -61,16 +61,14 @@ class EmailWatcher:
             return
 
         self.status = f"indexing {len(new_files)} new email(s)…"
-        indexed_count = 0
+        to_embed: list[dict] = []
 
         for path in new_files:
             try:
                 parsed = eml_parser.parse_eml(path)
                 if parsed is None:
                     continue
-
-                inserted = indexer.insert_email(parsed)
-                if not inserted:
+                if not indexer.insert_email(parsed):
                     continue
 
                 text = f"{parsed.get('subject', '')} {parsed.get('body_text', '')}"
@@ -79,17 +77,30 @@ class EmailWatcher:
                 if entities:
                     indexer.insert_entities(parsed["id"], entities)
 
-                embed_text = f"{parsed.get('subject', '')} {parsed.get('body_text', '')[:400]}"
-                vec = semantic_search.embed_text(embed_text)
-                indexer.insert_embedding(parsed["id"], vec)
-
-                indexed_count += 1
-
+                to_embed.append(parsed)
             except Exception as exc:
                 logger.warning("Failed to index %s: %s", path, exc)
 
-        self.last_indexed = indexed_count
-        self.status = f"watching ({indexed_count} indexed this scan)"
+        if to_embed:
+            texts = [
+                f"{p.get('subject', '')} {p.get('body_text', '')[:400]}"
+                for p in to_embed
+            ]
+            try:
+                vecs = semantic_search.embed_batch(texts)
+                for parsed, vec in zip(to_embed, vecs):
+                    indexer.insert_embedding(parsed["id"], vec)
+            except Exception as exc:
+                logger.warning("embed_batch failed, falling back: %s", exc)
+                for parsed in to_embed:
+                    try:
+                        t = f"{parsed.get('subject', '')} {parsed.get('body_text', '')[:400]}"
+                        indexer.insert_embedding(parsed["id"], semantic_search.embed_text(t))
+                    except Exception as e:
+                        logger.warning("embed failed for %s: %s", parsed["id"], e)
+
+        self.last_indexed = len(to_embed)
+        self.status = f"watching ({len(to_embed)} indexed this scan)"
 
 
 def run_initial_index(folder: str) -> dict:
@@ -97,7 +108,7 @@ def run_initial_index(folder: str) -> dict:
     indexer.init_db()
 
     new_files = indexer.get_unindexed_files(folder)
-    indexed = 0
+    to_embed: list[dict] = []
 
     for path in new_files:
         try:
@@ -112,12 +123,26 @@ def run_initial_index(folder: str) -> dict:
             if entities:
                 indexer.insert_entities(parsed["id"], entities)
 
-            embed_text = f"{parsed.get('subject', '')} {parsed.get('body_text', '')[:400]}"
-            vec = semantic_search.embed_text(embed_text)
-            indexer.insert_embedding(parsed["id"], vec)
-
-            indexed += 1
+            to_embed.append(parsed)
         except Exception as exc:
             logger.warning("Failed to index %s: %s", path, exc)
 
-    return {"indexed": indexed, "total": indexer.get_email_count()}
+    if to_embed:
+        texts = [
+            f"{p.get('subject', '')} {p.get('body_text', '')[:400]}"
+            for p in to_embed
+        ]
+        try:
+            vecs = semantic_search.embed_batch(texts)
+            for parsed, vec in zip(to_embed, vecs):
+                indexer.insert_embedding(parsed["id"], vec)
+        except Exception as exc:
+            logger.warning("embed_batch failed, falling back: %s", exc)
+            for parsed in to_embed:
+                try:
+                    t = f"{parsed.get('subject', '')} {parsed.get('body_text', '')[:400]}"
+                    indexer.insert_embedding(parsed["id"], semantic_search.embed_text(t))
+                except Exception as e:
+                    logger.warning("embed failed for %s: %s", parsed["id"], e)
+
+    return {"indexed": len(to_embed), "total": indexer.get_email_count()}

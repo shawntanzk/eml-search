@@ -324,6 +324,24 @@ def render_month_html(year: int, month: int, events: list[dict]) -> tuple[str, i
 
 # ── Email correlation ─────────────────────────────────────────────────────────
 
+def _recency_multiplier(date_str: str, today: datetime) -> float:
+    """Decay score for emails that are old relative to today."""
+    if not date_str:
+        return 0.5
+    try:
+        em_dt = datetime.fromisoformat(date_str[:19])
+        days_old = max(0, (today - em_dt).days)
+    except Exception:
+        return 0.5
+    if days_old <= 60:
+        return 1.0
+    if days_old <= 180:
+        return 0.65
+    if days_old <= 365:
+        return 0.30
+    return 0.08
+
+
 def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> list[dict]:
     """
     Find emails related to a calendar event using a multi-signal approach:
@@ -334,7 +352,8 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
     4. Tag keyword matching (tags whose name appears in subject/body)
     5. Direct attendee / organizer email match (strongest signal)
 
-    All signals are merged with Reciprocal Rank Fusion (RRF).
+    Results are RRF-merged then re-ranked by a recency multiplier that
+    strongly penalises emails older than 60 days.
     """
     from modules import indexer, semantic_search, nlp_engine
 
@@ -343,25 +362,23 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
     all_emails   = event.get("all_emails", [])
     search_text  = f"{subject} {body_snippet}".strip()
 
-    conn = indexer._get_conn()
+    conn  = indexer._get_conn()
+    today = datetime.utcnow()
 
     # ── 1. FTS ────────────────────────────────────────────────────────────────
-    fts_results: list[dict] = []
-    if subject.strip():
-        fts_results = indexer.search_fts(subject, filters={}, limit=200)
+    fts_results = indexer.search_fts(subject, filters={}, limit=200) if subject.strip() else []
+    fts_rank = {r["id"]: i for i, r in enumerate(fts_results)}
 
     # ── 2. Semantic ───────────────────────────────────────────────────────────
-    sem_results: list[dict] = []
+    sem_rank: dict[str, int] = {}
     sem_ok, _ = semantic_search.model_status()
     if sem_ok and search_text:
         try:
-            from modules.semantic_search import embed_text, top_k as _top_k
-            vec = embed_text(search_text)
-            sem_ids, _ = _top_k(vec, k=200)
-            for eid in sem_ids:
-                em = indexer.get_email_by_id(eid)
-                if em:
-                    sem_results.append(em)
+            ids, matrix = indexer.get_cached_embeddings()
+            if len(ids) > 0:
+                vec   = semantic_search.embed_text(search_text)
+                pairs = semantic_search.cosine_search(vec, ids, matrix, top_k=200)
+                sem_rank = {eid: i for i, (eid, _) in enumerate(pairs)}
         except Exception:
             pass
 
@@ -371,10 +388,9 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
         try:
             entities = nlp_engine.extract_entities(search_text)
             for ent in entities:
-                if ent["label"] in ("PERSON", "ORG", "GPE"):
+                if ent["label"] in ("PERSON", "ORG", "GPE") and len(ent["text"]) > 2:
                     rows = conn.execute(
-                        "SELECT DISTINCT email_id FROM email_entities "
-                        "WHERE entity_text LIKE ?",
+                        "SELECT DISTINCT email_id FROM email_entities WHERE entity_text LIKE ?",
                         (f"%{ent['text']}%",),
                     ).fetchall()
                     for r in rows:
@@ -396,29 +412,32 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
                 tag_email_ids.add(r["email_id"])
 
     # ── 5. Attendee / organizer email match ───────────────────────────────────
-    # Exclude the user's own address — they attend everything, so it adds no signal.
+    # Exclude the user's own address — they attend everything, zero signal.
     _user_addr = user_email.lower().strip()
+    attendee_addrs = [
+        addr.lower().strip() for addr in all_emails
+        if addr and addr.lower().strip() and addr.lower().strip() != _user_addr
+    ]
+
     attendee_email_ids: set[str] = set()
-    for addr in all_emails:
-        if not addr:
-            continue
-        a = addr.lower().strip()
-        if _user_addr and a == _user_addr:
-            continue
-        rows = conn.execute(
-            "SELECT id FROM emails "
-            "WHERE sender_email LIKE ? OR recipients LIKE ? OR cc LIKE ?",
-            (f"%{a}%", f"%{a}%", f"%{a}%"),
-        ).fetchall()
-        for r in rows:
+    if attendee_addrs:
+        # Batch sender lookup (indexed column — fast)
+        ph = ",".join("?" * len(attendee_addrs))
+        for r in conn.execute(
+            f"SELECT id FROM emails WHERE sender_email IN ({ph})", attendee_addrs
+        ).fetchall():
             attendee_email_ids.add(r["id"])
+        # JSON recipients/cc lookup — quote-wrapped for precision
+        for addr in attendee_addrs:
+            pattern = f'%"{addr}"%'
+            for r in conn.execute(
+                "SELECT id FROM emails WHERE recipients LIKE ? OR cc LIKE ?",
+                (pattern, pattern),
+            ).fetchall():
+                attendee_email_ids.add(r["id"])
 
     # ── RRF merge ─────────────────────────────────────────────────────────────
-    # Priority: attendees > subject FTS > semantic > entity/tag
-    fts_rank = {r["id"]: i for i, r in enumerate(fts_results)}
-    sem_rank = {r["id"]: i for i, r in enumerate(sem_results)}
-
-    all_ids = (
+    all_candidate_ids = (
         set(fts_rank)
         | set(sem_rank)
         | entity_email_ids
@@ -427,11 +446,11 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
     )
 
     K = 60
-    scores: dict[str, float] = {}
-    for eid in all_ids:
+    raw_scores: dict[str, float] = {}
+    for eid in all_candidate_ids:
         s = 0.0
         if eid in fts_rank:
-            s += 2.0 / (K + fts_rank[eid])   # double weight vs semantic
+            s += 2.0 / (K + fts_rank[eid])
         if eid in sem_rank:
             s += 1.0 / (K + sem_rank[eid])
         if eid in entity_email_ids:
@@ -439,29 +458,40 @@ def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> l
         if eid in tag_email_ids:
             s += 0.003
         if eid in attendee_email_ids:
-            s += 0.50   # dominant — direct attendee/organiser match
-        scores[eid] = s
+            s += 0.50
+        raw_scores[eid] = s
 
-    ranked_ids = sorted(scores, key=lambda x: -scores[x])[:limit]
+    # Pre-fetch top candidates (3× limit gives room to re-rank by recency)
+    candidate_ids = sorted(raw_scores, key=lambda x: -raw_scores[x])[: limit * 3]
+    emails_map = indexer.get_emails_by_ids(candidate_ids)
+
+    # Apply recency multiplier and re-rank
+    final_scores = {
+        eid: raw_scores[eid] * _recency_multiplier(
+            (emails_map[eid].get("date") or "") if eid in emails_map else "", today
+        )
+        for eid in candidate_ids
+        if eid in emails_map
+    }
+
+    ranked_ids = sorted(final_scores, key=lambda x: -final_scores[x])[:limit]
 
     results = []
     for eid in ranked_ids:
-        em = indexer.get_email_by_id(eid)
-        if em:
-            em = dict(em)
-            signals: list[str] = []
-            if eid in attendee_email_ids:
-                signals.append("👥 Attendee")
-            if eid in fts_rank:
-                signals.append("📝 Subject")
-            if eid in sem_rank:
-                signals.append("🔍 Semantic")
-            if eid in entity_email_ids:
-                signals.append("🏷 Entity")
-            if eid in tag_email_ids:
-                signals.append("🔖 Tag")
-            em["_match_signals"] = signals
-            results.append(em)
+        em = dict(emails_map[eid])
+        signals: list[str] = []
+        if eid in attendee_email_ids:
+            signals.append("👥 Attendee")
+        if eid in fts_rank:
+            signals.append("📝 Subject")
+        if eid in sem_rank:
+            signals.append("🔍 Semantic")
+        if eid in entity_email_ids:
+            signals.append("🏷 Entity")
+        if eid in tag_email_ids:
+            signals.append("🔖 Tag")
+        em["_match_signals"] = signals
+        results.append(em)
     return results
 
 

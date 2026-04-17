@@ -227,9 +227,14 @@ def get_all_embeddings() -> tuple[list[str], np.ndarray]:
     rows = conn.execute("SELECT email_id, vector FROM embeddings").fetchall()
     if not rows:
         return [], np.empty((0, 0), dtype=np.float32)
-    ids = [r["email_id"] for r in rows]
-    vecs = [np.frombuffer(r["vector"], dtype=np.float32) for r in rows]
-    return ids, np.vstack(vecs)
+    n = len(rows)
+    dim = len(rows[0]["vector"]) // 4  # float32 = 4 bytes
+    matrix = np.empty((n, dim), dtype=np.float32)
+    ids = []
+    for i, r in enumerate(rows):
+        ids.append(r["email_id"])
+        matrix[i] = np.frombuffer(r["vector"], dtype=np.float32)
+    return ids, matrix
 
 
 @st.cache_data
@@ -286,6 +291,30 @@ def get_email_by_id(email_id: str) -> Optional[dict]:
     result["cc"] = json.loads(result.get("cc") or "[]")
     result["attachment_names"] = json.loads(result.get("attachment_names") or "[]")
     return result
+
+
+def get_email_keywords(email_id: str, limit: int = 10) -> list[str]:
+    """Return stored entity texts for an email — no model inference needed."""
+    rows = _get_conn().execute(
+        "SELECT entity_text FROM email_entities WHERE email_id = ? "
+        "AND entity_label IN ('PERSON','ORG','GPE','PRODUCT','LOC') LIMIT ?",
+        (email_id, limit),
+    ).fetchall()
+    return [r["entity_text"] for r in rows]
+
+
+def get_emails_by_ids(email_ids: list[str]) -> dict[str, dict]:
+    """Fetch multiple emails by ID in a single query. Returns {id: email_dict}."""
+    if not email_ids:
+        return {}
+    conn = _get_conn()
+    placeholders = ",".join("?" * len(email_ids))
+    rows = conn.execute(
+        f"SELECT id, subject, sender_name, sender_email, date, has_attachments, thread_id, body_text"
+        f" FROM emails WHERE id IN ({placeholders})",
+        email_ids,
+    ).fetchall()
+    return {r["id"]: dict(r) for r in rows}
 
 
 def list_emails(filters: dict, limit: int = 50, offset: int = 0) -> list[dict]:

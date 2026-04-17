@@ -19,6 +19,9 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+_ICAL_DAYS_BACK    = 30
+_ICAL_DAYS_FORWARD = 60
+
 import requests
 
 # ── Per-account TTL caches ────────────────────────────────────────────────────
@@ -91,12 +94,14 @@ def fetch_all_accounts(
                 acc.get("password", ""),
                 ttl=ttl,
                 account_id=acc_id,
+                days_back=int(acc.get("days_back", _ICAL_DAYS_BACK)),
+                days_forward=int(acc.get("days_forward", _ICAL_DAYS_FORWARD)),
             )
         elif acc_type == "graph":
             events, err = fetch_graph_calendar(
                 acc.get("access_token", ""),
-                days_back=int(acc.get("days_back", 30)),
-                days_forward=int(acc.get("days_forward", 90)),
+                days_back=int(acc.get("days_back", _ICAL_DAYS_BACK)),
+                days_forward=int(acc.get("days_forward", _ICAL_DAYS_FORWARD)),
                 ttl=ttl,
                 account_id=acc_id,
             )
@@ -159,14 +164,17 @@ def fetch_ical(
     password: str = "",
     ttl: int = 900,
     account_id: str = "",
+    days_back: int = _ICAL_DAYS_BACK,
+    days_forward: int = _ICAL_DAYS_FORWARD,
 ) -> tuple[list[dict], str]:
     """
     Fetch and parse an ICS feed from *url*.  Returns ``(events, error_str)``.
     webcal:// is automatically promoted to https://.
     Results are cached per account_id (or per url) for *ttl* seconds.
+    Only events within [days_back, days_forward] of today are returned.
     """
     url = re.sub(r"^webcal://", "https://", url.strip())
-    cache_key = f"{url}|{username}"
+    cache_key = f"{url}|{username}|{days_back}|{days_forward}"
     key = account_id or cache_key
 
     with _cache_lock:
@@ -182,7 +190,7 @@ def fetch_ical(
         with _cache_lock:
             return list((_ical_caches.get(key) or {}).get("events", [])), f"Fetch failed: {exc}"
 
-    events, err = _parse_ics_bytes(resp.content)
+    events, err = _parse_ics_bytes(resp.content, days_back=days_back, days_forward=days_forward)
 
     with _cache_lock:
         _ical_caches[key] = {"events": events, "fetched_at": time.time(), "key": cache_key}
@@ -190,7 +198,11 @@ def fetch_ical(
     return events, err
 
 
-def _parse_ics_bytes(data: bytes) -> tuple[list[dict], str]:
+def _parse_ics_bytes(
+    data: bytes,
+    days_back: int = _ICAL_DAYS_BACK,
+    days_forward: int = _ICAL_DAYS_FORWARD,
+) -> tuple[list[dict], str]:
     try:
         from icalendar import Calendar
     except ImportError:
@@ -200,12 +212,21 @@ def _parse_ics_bytes(data: bytes) -> tuple[list[dict], str]:
     except Exception as exc:
         return [], f"Could not parse ICS data: {exc}"
 
+    window_start = datetime.utcnow() - timedelta(days=days_back)
+    window_end   = datetime.utcnow() + timedelta(days=days_forward)
+
     events: list[dict] = []
     for component in cal.walk():
         if component.name != "VEVENT":
             continue
         ev = _parse_vevent(component)
-        if ev:
+        if not ev:
+            continue
+        # Always keep recurring events (RRULE) — their base date may be old
+        # but they still fire within the window.
+        if ev["start_dt"] is None or component.get("RRULE"):
+            events.append(ev)
+        elif window_start <= ev["start_dt"] <= window_end:
             events.append(ev)
 
     events.sort(key=lambda e: e["start_dt"] or datetime.min)

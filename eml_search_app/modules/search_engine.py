@@ -1,9 +1,42 @@
 """Orchestrates FTS, semantic, and hybrid search with Reciprocal Rank Fusion."""
 import sqlite3
+from datetime import datetime
 from typing import Optional
 
 import config
 from modules import indexer, semantic_search
+
+
+def _recency_score(date_str: str) -> float:
+    """Slow decay: 1.0 for <90 days, floors at 0.65 beyond 2 years."""
+    if not date_str:
+        return 0.8
+    try:
+        dt = datetime.fromisoformat(date_str[:19])
+        days_old = max(0, (datetime.utcnow() - dt).days)
+    except Exception:
+        return 0.8
+    if days_old <= 90:
+        return 1.0
+    if days_old <= 365:
+        return 0.85
+    if days_old <= 730:
+        return 0.75
+    return 0.65
+
+
+def _apply_recency(results: list[dict], weight: float = 0.15) -> list[dict]:
+    """Re-rank by blending normalised relevance rank with a recency score.
+    Weight=0.15 keeps relevance dominant while nudging recent emails upward."""
+    n = len(results)
+    if n <= 1:
+        return results
+    scored = [
+        ((1 - weight) * (1.0 - i / n) + weight * _recency_score(r.get("date", "")), r)
+        for i, r in enumerate(results)
+    ]
+    scored.sort(key=lambda x: -x[0])
+    return [r for _, r in scored]
 
 
 def _rrf_merge(
@@ -21,28 +54,30 @@ def _rrf_merge(
     for rank, eid in enumerate(sem_ids):
         rrf[eid] = rrf.get(eid, 0.0) + 1.0 / (k + rank + 1)
 
-    all_ids = sorted(rrf, key=lambda x: rrf[x], reverse=True)
+    all_ids = sorted(rrf, key=lambda x: rrf[x], reverse=True)[: config.MAX_SEARCH_RESULTS]
 
     fts_by_id = {r["id"]: r for r in fts_results}
+    sem_only_ids = [eid for eid in all_ids if eid not in fts_by_id]
+    sem_only_map = indexer.get_emails_by_ids(sem_only_ids)
+
     rows = []
-    for eid in all_ids[: config.MAX_SEARCH_RESULTS]:
+    for eid in all_ids:
         if eid in fts_by_id:
             rows.append(fts_by_id[eid])
-        else:
-            em = indexer.get_email_by_id(eid)
-            if em:
-                rows.append(
-                    {
-                        "id": em["id"],
-                        "subject": em["subject"],
-                        "sender_name": em["sender_name"],
-                        "sender_email": em["sender_email"],
-                        "date": em["date"],
-                        "has_attachments": em["has_attachments"],
-                        "thread_id": em["thread_id"],
-                        "snippet": (em.get("body_text") or "")[:200],
-                    }
-                )
+        elif eid in sem_only_map:
+            em = sem_only_map[eid]
+            rows.append(
+                {
+                    "id": em["id"],
+                    "subject": em["subject"],
+                    "sender_name": em["sender_name"],
+                    "sender_email": em["sender_email"],
+                    "date": em["date"],
+                    "has_attachments": em["has_attachments"],
+                    "thread_id": em["thread_id"],
+                    "snippet": (em.get("body_text") or "")[:200],
+                }
+            )
     return rows
 
 
@@ -96,15 +131,16 @@ def search(
     if mode == "fts" or not query.strip():
         if not query.strip():
             return indexer.list_emails(filters, limit=limit)
-        return fts_results[:limit]
+        return _apply_recency(fts_results[:limit])
 
     if mode == "semantic":
         if not sem_results:
             return []
         result_ids = [rid for rid, _ in sem_results[:limit]]
+        emails_map = indexer.get_emails_by_ids(result_ids)
         rows = []
         for eid in result_ids:
-            em = indexer.get_email_by_id(eid)
+            em = emails_map.get(eid)
             if em:
                 rows.append(
                     {
@@ -118,11 +154,11 @@ def search(
                         "snippet": (em.get("body_text") or "")[:200],
                     }
                 )
-        return rows
+        return _apply_recency(rows)
 
     # Hybrid: RRF merge
     merged = _rrf_merge(fts_results, sem_results)
-    return merged[:limit]
+    return _apply_recency(merged[:limit])
 
 
 def _apply_filters_to_ids(ids: list[str], filters: dict) -> set[str]:

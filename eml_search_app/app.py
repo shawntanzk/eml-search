@@ -1,4 +1,5 @@
 """EML Search — Streamlit app entry point."""
+import html as _html
 import sys
 from pathlib import Path
 
@@ -108,6 +109,56 @@ _mode = _settings.get("mode", "offline")   # "offline" | "online"
 _watcher = _get_watcher(_current_folder())
 _imap_poller = _maybe_start_imap_poller() if _mode == "online" else None
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_calendar_events(
+    _accounts: list, display_tz: str, refresh_min: int
+) -> tuple[list[dict], dict[str, str]]:
+    """Fetch + timezone-convert calendar events. TTL=60s at Streamlit level;
+    real refresh rate is controlled by the in-module per-account TTL cache."""
+    raw, errors = calendar_online.fetch_all_accounts(_accounts, refresh_min)
+    return calendar_reader.convert_display_tz(raw, display_tz), errors
+
+
+@st.fragment
+def _render_search_results(results: list, all_tags: list) -> None:
+    """Fragment: open/close reruns only this section, not the whole app."""
+    if "open_email" not in st.session_state:
+        st.session_state.open_email = None
+
+    for r in results:
+        with st.container(border=True):
+            hdr, _ = st.columns([4, 1])
+            with hdr:
+                clicked = st.button(
+                    f"**{r.get('subject') or '(no subject)'}**",
+                    key=f"btn_{r['id']}",
+                    use_container_width=True,
+                )
+                if clicked:
+                    st.session_state.open_email = (
+                        None if st.session_state.open_email == r["id"] else r["id"]
+                    )
+                st.caption(
+                    f"From: {r.get('sender_name', '')} <{r.get('sender_email', '')}>"
+                    f"  ·  {(r.get('date') or '')[:16]}"
+                    + ("  ·  📎" if r.get("has_attachments") else "")
+                )
+
+            if st.session_state.open_email == r["id"]:
+                em = indexer.get_email_by_id(r["id"])
+                if em:
+                    st.divider()
+                    _render_email_detail(em, all_tags)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _run_search(query: str, mode: str, filters: dict, limit: int) -> list[dict]:
+    """Cache search results so open/close toggles don't re-run the transformer."""
+    return search_engine.search(query, mode=mode, filters=filters, limit=limit)
+
+
+
 # ── Tab-switch helper (must run before tabs are rendered) ─────────────────────
 # When SPARQL navigation buttons set switch_to_search=True, inject JS that
 # clicks the Search tab, then clear the flag so it doesn't fire again.
@@ -174,20 +225,20 @@ def _render_email_detail(em: dict, all_tags: list) -> None:
 
     body_col, kw_col = st.columns([3, 1])
     with body_col:
-        st.text_area(
-            "Body",
-            value=em.get("body_text", "")[:3000],
-            height=200,
-            disabled=True,
-            key=f"body_{em['id']}",
+        st.markdown("**Body**")
+        _body_safe = _html.escape(em.get("body_text", "")[:3000])
+        st.markdown(
+            f'<div style="background:#f8f9fa;border:1px solid #e0e4ea;border-radius:6px;'
+            f'padding:10px 14px;height:200px;overflow-y:auto;'
+            f'white-space:pre-wrap;font-size:13px;line-height:1.5;color:#262730;">'
+            f'{_body_safe}</div>',
+            unsafe_allow_html=True,
         )
     with kw_col:
-        keywords = nlp_engine.extract_keywords(em.get("body_text", ""))
+        keywords = indexer.get_email_keywords(em["id"])
         if keywords:
             st.write("**Keywords**")
             st.write(", ".join(keywords))
-        elif not nlp_engine.NLP_AVAILABLE():
-            st.caption("Keywords unavailable — spaCy model not installed.")
 
     st.divider()
     st.write("**Tags**")
@@ -266,7 +317,6 @@ with st.sidebar:
     with st.expander("NLP diagnostics", expanded=False):
         _nlp_ok = nlp_engine.NLP_AVAILABLE()
         _sem_ok, _sem_err = semantic_search.model_status()
-        _total = indexer.get_email_count()
         _embedded = indexer.get_embedding_count()
 
         if _nlp_ok:
@@ -276,8 +326,8 @@ with st.sidebar:
 
         if _sem_ok:
             st.success(f"Sentence-transformer loaded")
-            if _embedded < _total:
-                st.warning(f"Embeddings: {_embedded}/{_total} — {_total - _embedded} email(s) missing.")
+            if _embedded < total:
+                st.warning(f"Embeddings: {_embedded}/{total} — {total - _embedded} email(s) missing.")
                 if st.button("Generate missing embeddings", key="fill_embeddings"):
                     missing = indexer.get_emails_without_embeddings()
                     progress = st.progress(0, text="Embedding emails…")
@@ -293,7 +343,7 @@ with st.sidebar:
                     st.success(f"Done — {len(missing)} embedding(s) generated.")
                     st.rerun()
             else:
-                st.success(f"Embeddings: {_embedded}/{_total}")
+                st.success(f"Embeddings: {_embedded}/{total}")
         else:
             st.error(f"Sentence-transformer: {_sem_err}")
 
@@ -368,7 +418,7 @@ with tab_search:
                 key="search_mode",
             )
 
-        results = search_engine.search(query, mode=mode, filters=filters, limit=50)
+        results = _run_search(query, mode, filters, 50)
 
         if total == 0:
             st.info("No emails indexed yet. Go to **Settings** to point the app at your EML folder.")
@@ -378,35 +428,8 @@ with tab_search:
             if query:
                 st.caption(f"{len(results)} result(s) — mode: **{mode}**")
 
-            if "open_email" not in st.session_state:
-                st.session_state.open_email = None
-
-            all_tags = tagger.get_all_tags()  # for the add-tag dropdown
-
-            for r in results:
-                with st.container(border=True):
-                    hdr, _ = st.columns([4, 1])
-                    with hdr:
-                        clicked = st.button(
-                            f"**{r.get('subject') or '(no subject)'}**",
-                            key=f"btn_{r['id']}",
-                            use_container_width=True,
-                        )
-                        if clicked:
-                            st.session_state.open_email = (
-                                None if st.session_state.open_email == r["id"] else r["id"]
-                            )
-                        st.caption(
-                            f"From: {r.get('sender_name', '')} <{r.get('sender_email', '')}>"
-                            f"  ·  {(r.get('date') or '')[:16]}"
-                            + ("  ·  📎" if r.get("has_attachments") else "")
-                        )
-
-                    if st.session_state.open_email == r["id"]:
-                        em = indexer.get_email_by_id(r["id"])
-                        if em:
-                            st.divider()
-                            _render_email_detail(em, all_tags)
+            all_tags = tagger.get_all_tags()
+            _render_search_results(results, all_tags)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -634,11 +657,16 @@ with tab_graph:
     if not abox_path.exists():
         st.info("No graph data yet. Click **Build / Rebuild Graph** to generate it.")
     else:
-        try:
-            abox = load_abox()
-        except Exception as exc:
-            st.error(f"Failed to load graph: {exc}")
-            abox = None
+        # Only re-parse the TTL file when it has actually changed on disk.
+        _abox_mtime = abox_path.stat().st_mtime
+        if st.session_state.get("_graph_mtime") != _abox_mtime:
+            try:
+                st.session_state["_graph_abox"]  = load_abox()
+                st.session_state["_graph_mtime"] = _abox_mtime
+            except Exception as exc:
+                st.error(f"Failed to load graph: {exc}")
+                st.session_state["_graph_abox"] = None
+        abox = st.session_state.get("_graph_abox")
 
         if abox is not None:
             stats = get_cached_graph_stats()
@@ -988,14 +1016,13 @@ with tab_calendar:
             )
             st.stop()
 
-        _cal_events_raw, _cal_fetch_errors = calendar_online.fetch_all_accounts(
-            _cal_accounts, _cal_refresh_min
+        _cal_events, _cal_fetch_errors = _cached_calendar_events(
+            _cal_accounts, _cal_display_tz, _cal_refresh_min
         )
         for _acc_id, _acc_err in _cal_fetch_errors.items():
             _acc_name = next((a["name"] for a in _cal_accounts if a["id"] == _acc_id), _acc_id)
             st.warning(f"⚠️ **{_acc_name}**: {_acc_err}")
 
-        _cal_events = calendar_reader.convert_display_tz(_cal_events_raw, _cal_display_tz)
         _today = _date.today()
 
         if not _cal_events:

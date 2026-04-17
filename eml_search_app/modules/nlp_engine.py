@@ -11,6 +11,8 @@ from collections import Counter
 
 import config
 
+warnings.filterwarnings("ignore", category=UserWarning)
+
 # ── Email-based organisation extraction ─────────────────────────────────────
 
 # Domains that belong to free/personal email providers — not organisations.
@@ -89,8 +91,6 @@ def extract_orgs_from_email_addrs(parsed: dict) -> list[dict]:
             entities.append({"text": name, "label": "ORG"})
 
     return entities
-
-warnings.filterwarnings("ignore", category=UserWarning)
 
 _nlp = None
 _load_attempted = False

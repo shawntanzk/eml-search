@@ -5,12 +5,16 @@ import imaplib
 import logging
 import re
 import threading
-from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
-from html.parser import HTMLParser
 from typing import Optional
 
 from modules import indexer, nlp_engine, semantic_search
+from modules.eml_parser import (
+    _strip_html,
+    _decode_header_str as _decode_str,
+    _parse_address_list,
+    _decode_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,59 +32,6 @@ def _xoauth2_string(username: str, access_token: str) -> bytes:
     Returns raw bytes — imaplib.authenticate() handles base64 encoding itself."""
     auth_str = f"user={username}\x01auth=Bearer {access_token}\x01\x01"
     return auth_str.encode("ascii")
-
-
-# ---------------------------------------------------------------------------
-# Helpers (mirrors eml_parser internals, but for imaplib message bytes)
-# ---------------------------------------------------------------------------
-
-class _HTMLStripper(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.reset()
-        self._fed: list[str] = []
-
-    def handle_data(self, d: str) -> None:
-        self._fed.append(d)
-
-    def get_text(self) -> str:
-        return " ".join(self._fed)
-
-
-def _strip_html(html_text: str) -> str:
-    s = _HTMLStripper()
-    s.feed(html_text)
-    return s.get_text()
-
-
-def _decode_str(raw: str) -> str:
-    if not raw:
-        return ""
-    try:
-        return str(make_header(decode_header(raw)))
-    except Exception:
-        return raw
-
-
-def _parse_address_list(header_val: str) -> list[dict]:
-    if not header_val:
-        return []
-    result = []
-    for part in header_val.split(","):
-        part = part.strip()
-        name, addr = parseaddr(_decode_str(part))
-        addr = addr.lower()
-        if addr:
-            result.append({"name": name or addr.split("@")[0], "email": addr})
-    return result
-
-
-def _decode_payload(part) -> str:
-    payload = part.get_payload(decode=True)
-    if not payload:
-        return ""
-    charset = part.get_content_charset() or "utf-8"
-    return payload.decode(charset, errors="replace")
 
 
 def _parse_message(msg: email.message.Message, uid: str, mailbox: str, server: str) -> dict:

@@ -10,6 +10,7 @@ Tag assignment rules
                  email embedding.
 """
 import sqlite3
+from collections import defaultdict
 from typing import Optional
 
 import numpy as np
@@ -283,7 +284,6 @@ def classify_all_tags() -> dict:
     tfidf_tags = [t for t in tags if (t.get("nlp_method") or "tfidf") != "semantic"]
 
     # Group semantic tags by threshold so each group uses a single classify call
-    from collections import defaultdict
     semantic_by_threshold: dict[float, list] = defaultdict(list)
     for t in semantic_tags:
         semantic_by_threshold[t["nlp_threshold"]].append(t)
