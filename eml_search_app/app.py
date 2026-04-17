@@ -12,6 +12,7 @@ sys.path.insert(0, str(APP_DIR))
 
 import config
 from modules import indexer, nlp_engine, search_engine, semantic_search, tagger
+from modules import calendar_reader
 from modules.watcher import EmailWatcher
 from modules.imap_connector import IMAPConnector, MICROSOFT_AUTHORITY, OUTLOOK_IMAP_SCOPE
 from modules.graph_builder import (
@@ -318,8 +319,8 @@ with st.sidebar:
     }
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_search, tab_tags, tab_graph, tab_settings = st.tabs(
-    ["Search", "Tags", "Knowledge Graph", "Settings"]
+tab_search, tab_tags, tab_graph, tab_calendar, tab_settings = st.tabs(
+    ["Search", "Tags", "Knowledge Graph", "Calendar", "Settings"]
 )
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -947,6 +948,320 @@ LIMIT 20"""
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# CALENDAR TAB
+# ════════════════════════════════════════════════════════════════════════════
+with tab_calendar:
+    import calendar as _calendar_mod
+    from datetime import date as _date, timedelta as _timedelta
+
+    _cal_settings = config.load_settings()
+    _cal_json_path = _cal_settings.get("calendar_json_path", "")
+
+    # ── Path setup ────────────────────────────────────────────────────────────
+    if not _cal_json_path:
+        st.info(
+            "📅 **Calendar not configured.**  \n"
+            "Go to **Settings → Calendar** and enter the path to your events JSON file."
+        )
+    else:
+        # ── Load events ───────────────────────────────────────────────────────
+        _cal_events = calendar_reader.load_events(_cal_json_path)
+        _today = _date.today()
+
+        if not _cal_events:
+            st.warning(
+                f"No events loaded from `{_cal_json_path}`. "
+                "Check the path and that the file is valid JSON."
+            )
+        else:
+            # ── Summary metrics ───────────────────────────────────────────────
+            _week_start = _today - _timedelta(days=_today.weekday())
+            _week_end   = _week_start + _timedelta(days=6)
+            _this_week  = calendar_reader.events_in_range(_cal_events, _week_start, _week_end)
+            _upcoming   = [
+                e for e in _cal_events
+                if e["start_dt"] and e["start_dt"].date() >= _today
+            ]
+            _past = [
+                e for e in _cal_events
+                if e["start_dt"] and e["start_dt"].date() < _today
+            ]
+            _m1, _m2, _m3, _m4 = st.columns(4)
+            _m1.metric("Total events", len(_cal_events))
+            _m2.metric("This week",    len(_this_week))
+            _m3.metric("Upcoming",     len(_upcoming))
+            _m4.metric("Past",         len(_past))
+
+            st.divider()
+
+            # ── View selector ─────────────────────────────────────────────────
+            _view_tab_cal, _view_tab_list = st.tabs(["📅 Month", "📋 List"])
+
+            # ── MONTH VIEW ────────────────────────────────────────────────────
+            with _view_tab_cal:
+                # Month navigation state
+                if "cal_year"  not in st.session_state:
+                    st.session_state.cal_year  = _today.year
+                if "cal_month" not in st.session_state:
+                    st.session_state.cal_month = _today.month
+
+                _nav_l, _nav_title, _nav_today, _nav_r = st.columns([1, 4, 1.2, 1])
+                with _nav_l:
+                    if st.button("◀", key="cal_prev_month"):
+                        if st.session_state.cal_month == 1:
+                            st.session_state.cal_month = 12
+                            st.session_state.cal_year -= 1
+                        else:
+                            st.session_state.cal_month -= 1
+                        st.rerun()
+                with _nav_title:
+                    st.subheader(
+                        f"{_calendar_mod.month_name[st.session_state.cal_month]} "
+                        f"{st.session_state.cal_year}"
+                    )
+                with _nav_today:
+                    if st.button("Today", key="cal_goto_today"):
+                        st.session_state.cal_year  = _today.year
+                        st.session_state.cal_month = _today.month
+                        st.rerun()
+                with _nav_r:
+                    if st.button("▶", key="cal_next_month"):
+                        if st.session_state.cal_month == 12:
+                            st.session_state.cal_month = 1
+                            st.session_state.cal_year += 1
+                        else:
+                            st.session_state.cal_month += 1
+                        st.rerun()
+
+                # HTML calendar grid (visual only)
+                _month_html = calendar_reader.render_month_html(
+                    st.session_state.cal_year,
+                    st.session_state.cal_month,
+                    _cal_events,
+                )
+                components.html(_month_html, height=480, scrolling=False)
+
+                # Event picker for this month
+                _month_evs = [
+                    e for e in _cal_events
+                    if e["start_dt"]
+                    and e["start_dt"].year  == st.session_state.cal_year
+                    and e["start_dt"].month == st.session_state.cal_month
+                ]
+                if _month_evs:
+                    st.caption(f"{len(_month_evs)} event(s) this month — select one to view details:")
+                    _ev_labels_month = [
+                        f"{e['start_dt'].strftime('%b %d  %H:%M')}  —  {e['subject']}"
+                        for e in _month_evs
+                    ]
+                    _picked_month = st.selectbox(
+                        "Event",
+                        options=[""] + _ev_labels_month,
+                        label_visibility="collapsed",
+                        key="cal_month_pick",
+                    )
+                    if _picked_month:
+                        _idx = _ev_labels_month.index(_picked_month)
+                        st.session_state["cal_selected_event"] = _month_evs[_idx]
+                        st.session_state.pop("cal_list_pick", None)
+                else:
+                    st.info("No events in this month.")
+
+            # ── LIST VIEW ─────────────────────────────────────────────────────
+            with _view_tab_list:
+                _range_options = {
+                    "Today":        (_today,                         _today),
+                    "This week":    (_week_start,                    _week_end),
+                    "Next 7 days":  (_today,                         _today + _timedelta(days=6)),
+                    "Next 30 days": (_today,                         _today + _timedelta(days=29)),
+                    "Past 7 days":  (_today - _timedelta(days=6),    _today),
+                    "Past 30 days": (_today - _timedelta(days=29),   _today),
+                    "All events":   (
+                        min((e["start_dt"].date() for e in _cal_events if e["start_dt"]),
+                            default=_today),
+                        max((e["start_dt"].date() for e in _cal_events if e["start_dt"]),
+                            default=_today),
+                    ),
+                }
+                _range_choice = st.selectbox(
+                    "Show",
+                    options=list(_range_options.keys()),
+                    index=2,   # "Next 7 days" default
+                    key="cal_list_range",
+                )
+                _r_start, _r_end = _range_options[_range_choice]
+                _list_evs = calendar_reader.events_in_range(_cal_events, _r_start, _r_end)
+
+                if not _list_evs:
+                    st.info("No events in this range.")
+                else:
+                    # Group by date
+                    _by_date: dict[_date, list] = {}
+                    for _ev in _list_evs:
+                        _d = _ev["start_dt"].date()
+                        _by_date.setdefault(_d, []).append(_ev)
+
+                    for _d in sorted(_by_date):
+                        _is_today_d = _d == _today
+                        _day_label  = (
+                            f"**📌 Today, {_d.strftime('%A %d %B')}**"
+                            if _is_today_d
+                            else f"**{_d.strftime('%A %d %B')}**"
+                        )
+                        st.markdown(_day_label)
+
+                        for _ev in _by_date[_d]:
+                            with st.container(border=True):
+                                _c_time, _c_subj, _c_btn = st.columns([1.8, 5, 1.5])
+                                with _c_time:
+                                    _t_start = calendar_reader.fmt_time(_ev["start_dt"])
+                                    _t_end   = calendar_reader.fmt_time(_ev["end_dt"])
+                                    _dur     = calendar_reader.fmt_duration(_ev)
+                                    st.markdown(f"`{_t_start}–{_t_end}`")
+                                    if _dur:
+                                        st.caption(_dur)
+                                with _c_subj:
+                                    st.markdown(f"**{_ev['subject']}**")
+                                    if _ev["organizer"]:
+                                        st.caption(f"Organiser: {_ev['organizer']}")
+                                with _c_btn:
+                                    if st.button(
+                                        "View details",
+                                        key=f"cal_list_btn_{_ev['id']}_{_d}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state["cal_selected_event"] = _ev
+                                        st.session_state.pop("cal_month_pick", None)
+                                        st.session_state.pop("cal_list_pick", None)
+                                        st.rerun()
+
+            # ── EVENT DETAIL PANEL ────────────────────────────────────────────
+            _sel_ev: Optional[dict] = st.session_state.get("cal_selected_event")
+            if _sel_ev:
+                st.divider()
+                _dh_col, _close_col = st.columns([6, 1])
+                with _dh_col:
+                    st.subheader(_sel_ev["subject"])
+                with _close_col:
+                    if st.button("✕ Close", key="cal_close_detail"):
+                        del st.session_state["cal_selected_event"]
+                        st.rerun()
+
+                with st.container(border=True):
+                    # Time / duration / timezone row
+                    _di1, _di2, _di3 = st.columns(3)
+                    with _di1:
+                        _sd = _sel_ev["start_dt"]
+                        _ed = _sel_ev["end_dt"]
+                        if _sd:
+                            _date_str = _sd.strftime("%A, %d %B %Y")
+                            _time_str = (
+                                f"{_sd.strftime('%H:%M')} – {_ed.strftime('%H:%M')}"
+                                if _ed else _sd.strftime("%H:%M")
+                            )
+                            st.markdown(f"📅 **{_date_str}**  \n🕐 {_time_str}")
+                        _dur_str = calendar_reader.fmt_duration(_sel_ev)
+                        if _dur_str:
+                            st.caption(f"Duration: {_dur_str}")
+                    with _di2:
+                        if _sel_ev["organizer"]:
+                            st.markdown("**Organiser**")
+                            st.markdown(f"`{_sel_ev['organizer']}`")
+                            if st.button(
+                                "🔍 Search emails from organiser",
+                                key="cal_search_organiser",
+                            ):
+                                _nav_to_search(_sel_ev["organizer"])
+                    with _di3:
+                        if _sel_ev["time_zone"]:
+                            st.caption(f"🌐 {_sel_ev['time_zone']}")
+
+                    # Attendees
+                    _att_req = _sel_ev.get("required_attendees", [])
+                    _att_opt = _sel_ev.get("optional_attendees", [])
+                    if _att_req or _att_opt:
+                        st.divider()
+                        _a1, _a2 = st.columns(2)
+                        with _a1:
+                            if _att_req:
+                                st.markdown("**👥 Required attendees**")
+                                for _addr in _att_req:
+                                    _ac, _ab = st.columns([3, 1])
+                                    _ac.caption(_addr)
+                                    if _ab.button("🔍", key=f"cal_att_req_{_addr}", help=f"Search emails with {_addr}"):
+                                        _nav_to_search(_addr)
+                        with _a2:
+                            if _att_opt:
+                                st.markdown("**👤 Optional attendees**")
+                                for _addr in _att_opt:
+                                    _ac, _ab = st.columns([3, 1])
+                                    _ac.caption(_addr)
+                                    if _ab.button("🔍", key=f"cal_att_opt_{_addr}", help=f"Search emails with {_addr}"):
+                                        _nav_to_search(_addr)
+
+                    # Body
+                    if _sel_ev.get("body"):
+                        st.divider()
+                        with st.expander("📄 Invite body", expanded=False):
+                            st.text(_sel_ev["body"][:3000])
+
+                # ── Related emails ─────────────────────────────────────────
+                st.markdown("### 📧 Related emails")
+                st.caption(
+                    "Ranked by relevance — FTS on subject · semantic match on invite text · "
+                    "named entity overlap · tag keyword match · direct attendee/organiser email match."
+                )
+
+                with st.spinner("Finding related emails…"):
+                    _related = calendar_reader.find_related_emails(_sel_ev, limit=15)
+
+                if not _related:
+                    if indexer.get_email_count() == 0:
+                        st.info("No emails indexed yet — index some emails first.")
+                    else:
+                        st.info("No strongly related emails found for this event.")
+                else:
+                    # Tag summary across related emails
+                    _rel_ids   = [e["id"] for e in _related]
+                    _tag_summ  = calendar_reader.tag_summary(_rel_ids)
+                    if _tag_summ:
+                        _tag_badges = "  ".join(
+                            f"`{t['name']}` ×{t['cnt']}" for t in _tag_summ[:8]
+                        )
+                        st.caption(f"**Common tags across related emails:** {_tag_badges}")
+
+                    for _rem in _related:
+                        with st.container(border=True):
+                            _rh_col, _rb_col = st.columns([5, 1])
+                            with _rh_col:
+                                st.markdown(
+                                    f"**{_rem.get('subject') or '(no subject)'}**"
+                                )
+                                st.caption(
+                                    f"From: {_rem.get('sender_name', '')} "
+                                    f"<{_rem.get('sender_email', '')}>"
+                                    f"  ·  {(_rem.get('date') or '')[:16]}"
+                                    + ("  ·  📎" if _rem.get("has_attachments") else "")
+                                )
+                                # Show tags on this email
+                                _em_tags = tagger.get_email_tags(_rem["id"])
+                                if _em_tags:
+                                    _tbadges = "  ".join(
+                                        f"`{'👤' if t['source']=='manual' else '🤖'} {t['name']}`"
+                                        for t in _em_tags
+                                    )
+                                    st.caption(f"Tags: {_tbadges}")
+                            with _rb_col:
+                                if st.button(
+                                    "Open",
+                                    key=f"cal_open_rel_{_sel_ev['id']}_{_rem['id']}",
+                                    use_container_width=True,
+                                    help="Open this email in the Search tab",
+                                ):
+                                    _nav_to_email(_rem["id"])
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # SETTINGS TAB
 # ════════════════════════════════════════════════════════════════════════════
 with tab_settings:
@@ -1390,6 +1705,33 @@ with tab_settings:
             )
         else:
             st.warning("Poller not running — configure and authenticate IMAP above first.")
+
+    # ── Calendar (always shown) ───────────────────────────────────────────────
+    st.divider()
+    st.subheader("Calendar")
+    st.caption(
+        "Path to the JSON file produced by your calendar automation. "
+        "The file is re-read automatically whenever it changes (no restart needed)."
+    )
+    _cal_path_current = settings.get("calendar_json_path", "")
+    _cal_path_input = st.text_input(
+        "Events JSON file path",
+        value=_cal_path_current,
+        placeholder="/Users/you/calendar_events.json",
+        key="cal_json_path_input",
+    )
+    if st.button("Save calendar path", key="cal_save_path"):
+        settings["calendar_json_path"] = _cal_path_input.strip()
+        config.save_settings(settings)
+        st.success("Calendar path saved — switch to the **Calendar** tab to view events.")
+    if _cal_path_current:
+        from pathlib import Path as _P
+        _exists = _P(_cal_path_current).exists()
+        if _exists:
+            _events_count = len(calendar_reader.load_events(_cal_path_current))
+            st.caption(f"✓ File found — {_events_count} event(s) loaded.")
+        else:
+            st.warning(f"File not found: `{_cal_path_current}`")
 
     # ── Database (always shown) ───────────────────────────────────────────────
     st.divider()
