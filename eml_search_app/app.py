@@ -17,7 +17,7 @@ from modules.watcher import EmailWatcher
 from modules.imap_connector import IMAPConnector, MICROSOFT_AUTHORITY, OUTLOOK_IMAP_SCOPE
 from modules.graph_builder import (
     build_abox, save_abox, load_abox, get_merged_graph,
-    sparql_query, get_graph_stats, get_all_graph_nodes, get_subgraph,
+    sparql_query, get_graph_stats, get_cached_graph_stats, get_all_graph_nodes, get_cached_all_graph_nodes, get_subgraph,
     get_paths_between_seeds, inline_graph_assets,
 )
 
@@ -641,7 +641,7 @@ with tab_graph:
             abox = None
 
         if abox is not None:
-            stats = get_graph_stats(abox)
+            stats = get_cached_graph_stats()
             with stats_col:
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Triples",       stats["triples"])
@@ -658,7 +658,7 @@ with tab_graph:
                 "The graph shows each seed and its directly connected neighbours."
             )
 
-            all_nodes = get_all_graph_nodes(abox)
+            all_nodes = get_cached_all_graph_nodes()
 
             # Persistent seed set: {label: uri}
             if "_graph_seeds" not in st.session_state:
@@ -955,27 +955,19 @@ with tab_calendar:
     from datetime import date as _date, timedelta as _timedelta
 
     _cal_settings = config.load_settings()
-    _cal_json_path = _cal_settings.get("calendar_json_path", "")
+    _cal_accounts = _cal_settings.get("calendar_accounts", [])
+    _cal_display_tz = _cal_settings.get("calendar_display_tz", "Asia/Singapore")
+    _cal_refresh_min = int(_cal_settings.get("cal_refresh_minutes", 15))
 
-    # ── Path setup ────────────────────────────────────────────────────────────
-    if not _cal_json_path:
+    # ── Check if calendar is configured (online accounts or JSON file) ────────
+    if not _cal_accounts:
         st.info(
             "📅 **Calendar not configured.**  \n"
-            "Go to **Settings → Calendar** and enter the path to your events JSON file."
+            "Go to **Settings → Calendar** and add a calendar account "
+            "(iCal URL, Microsoft 365, or a local JSON file)."
         )
     else:
         # ── Load events from all configured accounts ──────────────────────────
-        _cal_display_tz  = _cal_settings.get("calendar_display_tz", "Asia/Singapore")
-        _cal_accounts    = _cal_settings.get("calendar_accounts", [])
-        _cal_refresh_min = int(_cal_settings.get("cal_refresh_minutes", 15))
-
-        if not _cal_accounts:
-            st.info(
-                "📅 **No calendars configured.**  \n"
-                "Go to **Settings → Calendar** and add a calendar account "
-                "(iCal URL, Microsoft 365, or a local JSON file)."
-            )
-            st.stop()
 
         # In offline mode, only JSON file accounts are permitted
         if _mode == "offline":
@@ -1008,8 +1000,8 @@ with tab_calendar:
 
         if not _cal_events:
             st.warning(
-                f"No events loaded from `{_cal_json_path}`. "
-                "Check the path and that the file is valid JSON."
+                "No events loaded from configured calendars. "
+                "Check your calendar account settings and try again."
             )
         else:
             # ── Summary metrics ───────────────────────────────────────────────

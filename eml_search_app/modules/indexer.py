@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import streamlit as st
 
 import config
 
@@ -229,6 +230,12 @@ def get_all_embeddings() -> tuple[list[str], np.ndarray]:
     ids = [r["email_id"] for r in rows]
     vecs = [np.frombuffer(r["vector"], dtype=np.float32) for r in rows]
     return ids, np.vstack(vecs)
+
+
+@st.cache_data
+def get_cached_embeddings() -> tuple[list[str], np.ndarray]:
+    """Cached version of get_all_embeddings for search operations."""
+    return get_all_embeddings()
 
 
 def search_fts(query: str, filters: dict, limit: int = 200) -> list[dict]:

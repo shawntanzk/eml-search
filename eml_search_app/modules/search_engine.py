@@ -73,7 +73,7 @@ def search(
         fts_results = indexer.search_fts(query, filters, limit=config.MAX_SEARCH_RESULTS)
 
     if mode in ("semantic", "hybrid") and query.strip() and semantic_search.SEMANTIC_AVAILABLE:
-        ids, matrix = indexer.get_all_embeddings()
+        ids, matrix = indexer.get_cached_embeddings()
         if len(ids) > 0:
             try:
                 q_vec = semantic_search.embed_text(query)

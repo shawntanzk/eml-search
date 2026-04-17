@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from rdflib import Graph, Namespace, URIRef, Literal, RDF, RDFS, OWL, XSD
+import streamlit as st
 
 
 def inline_graph_assets(html: str) -> str:
@@ -301,6 +302,13 @@ def get_graph_stats(g: Optional[Graph] = None) -> dict:
     }
 
 
+@st.cache_data
+def get_cached_graph_stats() -> dict:
+    """Cached version of graph stats for UI display."""
+    g = load_abox()
+    return get_graph_stats(g)
+
+
 def get_all_graph_nodes(g: Optional[Graph] = None) -> list[dict]:
     """Return every named individual with its type, label, and color — for the selection UI."""
     if g is None:
@@ -320,6 +328,13 @@ def get_all_graph_nodes(g: Optional[Graph] = None) -> list[dict]:
             "color": tcolor,
         })
     return sorted(result, key=lambda x: (x["type"], x["label"].lower()))
+
+
+@st.cache_data
+def get_cached_all_graph_nodes() -> list[dict]:
+    """Cached version of all graph nodes for the selection UI."""
+    g = load_abox()
+    return get_all_graph_nodes(g)
 
 
 def get_subgraph(
