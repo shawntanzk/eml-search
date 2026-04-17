@@ -306,6 +306,42 @@ def list_emails(filters: dict, limit: int = 50, offset: int = 0) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def delete_emails_by_paths(paths: list[str]) -> int:
+    """
+    Delete emails and all related data (entities, embeddings, tags) by file_path.
+    The FTS5 delete trigger handles emails_fts automatically.
+    Returns the number of emails deleted.
+    """
+    if not paths:
+        return 0
+    conn = _get_conn()
+    placeholders = ",".join("?" * len(paths))
+    rows = conn.execute(
+        f"SELECT id FROM emails WHERE file_path IN ({placeholders})", paths
+    ).fetchall()
+    email_ids = [r["id"] for r in rows]
+    if not email_ids:
+        return 0
+    id_ph = ",".join("?" * len(email_ids))
+    conn.execute(f"DELETE FROM email_entities  WHERE email_id IN ({id_ph})", email_ids)
+    conn.execute(f"DELETE FROM embeddings      WHERE email_id IN ({id_ph})", email_ids)
+    conn.execute(f"DELETE FROM email_tags      WHERE email_id IN ({id_ph})", email_ids)
+    conn.execute(f"DELETE FROM email_tag_blocks WHERE email_id IN ({id_ph})", email_ids)
+    conn.execute(f"DELETE FROM emails          WHERE id        IN ({id_ph})", email_ids)
+    conn.commit()
+    return len(email_ids)
+
+
+def get_indexed_imap_paths(host: str, mailbox: str) -> set[str]:
+    """Return the set of imap:// virtual file_paths already indexed for a given host+mailbox."""
+    conn = _get_conn()
+    prefix = f"imap://{host}/{mailbox}/"
+    rows = conn.execute(
+        "SELECT file_path FROM emails WHERE file_path LIKE ?", (prefix + "%",)
+    ).fetchall()
+    return {r["file_path"] for r in rows}
+
+
 def get_unindexed_files(folder: str) -> list[str]:
     conn = _get_conn()
     indexed = set(r[0] for r in conn.execute("SELECT file_path FROM emails").fetchall())
