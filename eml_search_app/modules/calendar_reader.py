@@ -324,7 +324,7 @@ def render_month_html(year: int, month: int, events: list[dict]) -> tuple[str, i
 
 # ── Email correlation ─────────────────────────────────────────────────────────
 
-def find_related_emails(event: dict, limit: int = 15) -> list[dict]:
+def find_related_emails(event: dict, limit: int = 15, user_email: str = "") -> list[dict]:
     """
     Find emails related to a calendar event using a multi-signal approach:
 
@@ -396,11 +396,15 @@ def find_related_emails(event: dict, limit: int = 15) -> list[dict]:
                 tag_email_ids.add(r["email_id"])
 
     # ── 5. Attendee / organizer email match ───────────────────────────────────
+    # Exclude the user's own address — they attend everything, so it adds no signal.
+    _user_addr = user_email.lower().strip()
     attendee_email_ids: set[str] = set()
     for addr in all_emails:
         if not addr:
             continue
         a = addr.lower().strip()
+        if _user_addr and a == _user_addr:
+            continue
         rows = conn.execute(
             "SELECT id FROM emails "
             "WHERE sender_email LIKE ? OR recipients LIKE ? OR cc LIKE ?",

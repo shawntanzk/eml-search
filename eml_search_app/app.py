@@ -993,7 +993,19 @@ with tab_calendar:
             _m2.metric("This week",    len(_this_week))
             _m3.metric("Upcoming",     len(_upcoming))
             _m4.metric("Past",         len(_past))
-            st.caption(f"🌐 Displaying in **{_cal_display_tz}**  ·  Change in Settings → Calendar")
+            def _cal_tz_label(tz_name: str) -> str:
+                from zoneinfo import ZoneInfo as _ZI
+                from datetime import datetime as _dt2
+                try:
+                    offset = _dt2.now(_ZI(tz_name)).utcoffset()
+                    total_min = int(offset.total_seconds() // 60)
+                    sign = "+" if total_min >= 0 else "-"
+                    h, m = divmod(abs(total_min), 60)
+                    suffix = f"GMT{sign}{h}:{m:02d}" if m else f"GMT{sign}{h}"
+                    return f"{tz_name} ({suffix})"
+                except Exception:
+                    return tz_name
+            st.caption(f"🌐 Displaying in **{_cal_tz_label(_cal_display_tz)}**  ·  Change in Settings → Calendar")
 
             st.divider()
 
@@ -1280,7 +1292,8 @@ with tab_calendar:
                 )
 
                 with st.spinner("Finding related emails…"):
-                    _related = calendar_reader.find_related_emails(_sel_ev, limit=15)
+                    _cal_user_email = _cal_settings.get("user_email", "")
+                    _related = calendar_reader.find_related_emails(_sel_ev, limit=15, user_email=_cal_user_email)
 
                 if not _related:
                     if indexer.get_email_count() == 0:
@@ -1780,6 +1793,22 @@ with tab_settings:
     # ── Calendar (always shown) ───────────────────────────────────────────────
     st.divider()
     st.subheader("Calendar")
+
+    # My email address (used to exclude self from attendee matching)
+    _my_email_current = settings.get("user_email", "")
+    _my_email_input = st.text_input(
+        "My email address",
+        value=_my_email_current,
+        placeholder="you@example.com",
+        help="Your address is excluded from attendee-based email matching — you attend every event, so it would inflate scores.",
+        key="cal_my_email_input",
+    )
+    if st.button("Save my email", key="cal_save_my_email"):
+        settings["user_email"] = _my_email_input.strip().lower()
+        config.save_settings(settings)
+        st.success("Email saved.")
+
+    st.divider()
     st.caption(
         "Path to the JSON file produced by your calendar automation. "
         "The file is re-read automatically whenever it changes (no restart needed)."
@@ -1823,11 +1852,26 @@ with tab_settings:
         "America/Los_Angeles",
         "Australia/Sydney",
     ]
+
+    def _fmt_tz(tz_name: str) -> str:
+        from zoneinfo import ZoneInfo as _ZI
+        from datetime import datetime as _dt
+        try:
+            offset = _dt.now(_ZI(tz_name)).utcoffset()
+            total_min = int(offset.total_seconds() // 60)
+            sign = "+" if total_min >= 0 else "-"
+            h, m = divmod(abs(total_min), 60)
+            suffix = f"GMT{sign}{h}:{m:02d}" if m else f"GMT{sign}{h}"
+            return f"{tz_name}  ({suffix})"
+        except Exception:
+            return tz_name
+
     _current_tz = settings.get("calendar_display_tz", "Asia/Singapore")
     _tz_idx = _tz_options.index(_current_tz) if _current_tz in _tz_options else 0
     _tz_input = st.selectbox(
         "Timezone",
         options=_tz_options,
+        format_func=_fmt_tz,
         index=_tz_idx,
         key="cal_tz_input",
         label_visibility="collapsed",
@@ -1836,7 +1880,7 @@ with tab_settings:
     if st.button("Save timezone", key="cal_save_tz"):
         settings["calendar_display_tz"] = _tz_input
         config.save_settings(settings)
-        st.success(f"Timezone saved — events will display in {_tz_input}.")
+        st.success(f"Timezone saved — events will display in {_fmt_tz(_tz_input)}.")
 
     # ── Database (always shown) ───────────────────────────────────────────────
     st.divider()
