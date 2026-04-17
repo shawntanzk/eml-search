@@ -41,14 +41,16 @@ def load_events(json_path: str) -> list[dict]:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             return list(_events_cache)
-
-        # Accept: plain list, {"events": [...]}, {"value": [...]} (Graph API style)
+        
+        # Accept: plain list, {"events": [...]}, {"value": [...]} (Graph API style),
+        # {"body": [...]} (local automation export)
         if isinstance(raw, list):
             items = raw
         elif isinstance(raw, dict):
-            items = raw.get("events") or raw.get("value") or []
+            items = raw.get("body") or raw.get("events") or raw.get("value") or []
         else:
             items = []
+
 
         parsed: list[dict] = []
         for item in items:
