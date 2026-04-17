@@ -12,7 +12,7 @@ sys.path.insert(0, str(APP_DIR))
 
 import config
 from modules import indexer, nlp_engine, search_engine, semantic_search, tagger
-from modules import calendar_reader
+from modules import calendar_reader, calendar_online
 from modules.watcher import EmailWatcher
 from modules.imap_connector import IMAPConnector, MICROSOFT_AUTHORITY, OUTLOOK_IMAP_SCOPE
 from modules.graph_builder import (
@@ -964,9 +964,45 @@ with tab_calendar:
             "Go to **Settings → Calendar** and enter the path to your events JSON file."
         )
     else:
-        # ── Load events ───────────────────────────────────────────────────────
-        _cal_display_tz = _cal_settings.get("calendar_display_tz", "Asia/Singapore")
-        _cal_events_raw = calendar_reader.load_events(_cal_json_path)
+        # ── Load events from all configured accounts ──────────────────────────
+        _cal_display_tz  = _cal_settings.get("calendar_display_tz", "Asia/Singapore")
+        _cal_accounts    = _cal_settings.get("calendar_accounts", [])
+        _cal_refresh_min = int(_cal_settings.get("cal_refresh_minutes", 15))
+
+        if not _cal_accounts:
+            st.info(
+                "📅 **No calendars configured.**  \n"
+                "Go to **Settings → Calendar** and add a calendar account "
+                "(iCal URL, Microsoft 365, or a local JSON file)."
+            )
+            st.stop()
+
+        # In offline mode, only JSON file accounts are permitted
+        if _mode == "offline":
+            _online_skipped = [a["name"] for a in _cal_accounts if a.get("enabled", True) and a.get("type") != "json"]
+            _cal_accounts = [a for a in _cal_accounts if a.get("type") == "json"]
+            if _online_skipped:
+                st.info(
+                    f"📴 Offline mode — skipping online calendar(s): "
+                    + ", ".join(f"**{n}**" for n in _online_skipped)
+                    + ". Switch to Online mode in Settings to use them."
+                )
+
+        if not _cal_accounts:
+            st.info(
+                "📅 No JSON calendar accounts configured.  \n"
+                "In offline mode only **JSON file** calendars are available.  \n"
+                "Add one in **Settings → Calendar**, or switch to Online mode."
+            )
+            st.stop()
+
+        _cal_events_raw, _cal_fetch_errors = calendar_online.fetch_all_accounts(
+            _cal_accounts, _cal_refresh_min
+        )
+        for _acc_id, _acc_err in _cal_fetch_errors.items():
+            _acc_name = next((a["name"] for a in _cal_accounts if a["id"] == _acc_id), _acc_id)
+            st.warning(f"⚠️ **{_acc_name}**: {_acc_err}")
+
         _cal_events = calendar_reader.convert_display_tz(_cal_events_raw, _cal_display_tz)
         _today = _date.today()
 
@@ -1005,7 +1041,22 @@ with tab_calendar:
                     return f"{tz_name} ({suffix})"
                 except Exception:
                     return tz_name
-            st.caption(f"🌐 Displaying in **{_cal_tz_label(_cal_display_tz)}**  ·  Change in Settings → Calendar")
+            _enabled_accs = [a for a in _cal_accounts if a.get("enabled", True)]
+            _acc_dots = "  ".join(
+                f'<span style="color:{a["color"]}">●</span> {a["name"]}'
+                for a in _enabled_accs
+            )
+            _last_fetched = calendar_online.last_fetched_str()
+            _cap_col, _ref_col = st.columns([5, 1])
+            _cap_col.markdown(
+                f"🌐 **{_cal_tz_label(_cal_display_tz)}**  ·  {_acc_dots}  "
+                f"· last fetched **{_last_fetched}**",
+                unsafe_allow_html=True,
+            )
+            with _ref_col:
+                if st.button("🔄 Refresh", key="cal_force_refresh", help="Force re-fetch all sources"):
+                    calendar_online.invalidate_account_cache()
+                    st.rerun()
 
             st.divider()
 
@@ -1141,16 +1192,20 @@ with tab_calendar:
                         if not _day_evs_w:
                             st.caption("—")
                         for _ev_w in _day_evs_w:
-                            _t_w = calendar_reader.fmt_time(_ev_w["start_dt"])
-                            _lbl_w = (
-                                f"{_t_w}  \n{_ev_w['subject'][:22]}"
-                                + ("…" if len(_ev_w["subject"]) > 22 else "")
+                            _t_w     = calendar_reader.fmt_time(_ev_w["start_dt"])
+                            _color_w = _ev_w.get("_account_color", "#4a6cf7")
+                            _subj_w  = _ev_w["subject"][:22] + ("…" if len(_ev_w["subject"]) > 22 else "")
+                            st.markdown(
+                                f'<span style="display:inline-block;width:8px;height:8px;'
+                                f'border-radius:50%;background:{_color_w};margin-right:4px"></span>'
+                                f'<small>{_t_w}</small>',
+                                unsafe_allow_html=True,
                             )
                             if st.button(
-                                _lbl_w,
+                                _subj_w,
                                 key=f"cal_week_ev_{_wd}_{_ev_w['id']}",
                                 use_container_width=True,
-                                help=_ev_w["subject"],
+                                help=f"{_ev_w.get('_account_name','')} — {_ev_w['subject']}",
                             ):
                                 st.session_state["cal_selected_event"] = _ev_w
                                 st.rerun()
@@ -1209,9 +1264,19 @@ with tab_calendar:
                                     if _dur:
                                         st.caption(_dur)
                                 with _c_subj:
-                                    st.markdown(f"**{_ev['subject']}**")
+                                    _ev_color = _ev.get("_account_color", "#4a6cf7")
+                                    _ev_acc   = _ev.get("_account_name", "")
+                                    st.markdown(
+                                        f'<span style="color:{_ev_color}">●</span> **{_ev["subject"]}**',
+                                        unsafe_allow_html=True,
+                                    )
+                                    _meta = []
+                                    if _ev_acc:
+                                        _meta.append(_ev_acc)
                                     if _ev["organizer"]:
-                                        st.caption(f"Organiser: {_ev['organizer']}")
+                                        _meta.append(f"Organiser: {_ev['organizer']}")
+                                    if _meta:
+                                        st.caption("  ·  ".join(_meta))
                                 with _c_btn:
                                     if st.button(
                                         "View details",
@@ -1803,7 +1868,7 @@ with tab_settings:
     st.divider()
     st.subheader("Calendar")
 
-    # My email address (used to exclude self from attendee matching)
+    # ── My email (exclude self from attendee scoring) ─────────────────────────
     _my_email_current = settings.get("user_email", "")
     _my_email_input = st.text_input(
         "My email address",
@@ -1817,49 +1882,14 @@ with tab_settings:
         config.save_settings(settings)
         st.success("Email saved.")
 
+    # ── Display timezone ──────────────────────────────────────────────────────
     st.divider()
-    st.caption(
-        "Path to the JSON file produced by your calendar automation. "
-        "The file is re-read automatically whenever it changes (no restart needed)."
-    )
-    _cal_path_current = settings.get("calendar_json_path", "")
-    _cal_path_input = st.text_input(
-        "Events JSON file path",
-        value=_cal_path_current,
-        placeholder="/Users/you/calendar_events.json",
-        key="cal_json_path_input",
-    )
-    if st.button("Save calendar path", key="cal_save_path"):
-        settings["calendar_json_path"] = _cal_path_input.strip()
-        config.save_settings(settings)
-        st.success("Calendar path saved — switch to the **Calendar** tab to view events.")
-    if _cal_path_current:
-        from pathlib import Path as _P
-        _exists = _P(_cal_path_current).exists()
-        if _exists:
-            _events_count = len(calendar_reader.load_events(_cal_path_current))
-            st.caption(f"✓ File found — {_events_count} event(s) loaded.")
-        else:
-            st.warning(f"File not found: `{_cal_path_current}`")
-
     st.markdown("**Display timezone**")
     _tz_options = [
-        "Asia/Singapore",
-        "UTC",
-        "Asia/Jakarta",
-        "Asia/Bangkok",
-        "Asia/Kuala_Lumpur",
-        "Asia/Tokyo",
-        "Asia/Shanghai",
-        "Asia/Hong_Kong",
-        "Asia/Seoul",
-        "Europe/London",
-        "Europe/Berlin",
-        "Europe/Paris",
-        "America/New_York",
-        "America/Chicago",
-        "America/Los_Angeles",
-        "Australia/Sydney",
+        "Asia/Singapore", "UTC", "Asia/Jakarta", "Asia/Bangkok",
+        "Asia/Kuala_Lumpur", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong",
+        "Asia/Seoul", "Europe/London", "Europe/Berlin", "Europe/Paris",
+        "America/New_York", "America/Chicago", "America/Los_Angeles", "Australia/Sydney",
     ]
 
     def _fmt_tz(tz_name: str) -> str:
@@ -1878,18 +1908,251 @@ with tab_settings:
     _current_tz = settings.get("calendar_display_tz", "Asia/Singapore")
     _tz_idx = _tz_options.index(_current_tz) if _current_tz in _tz_options else 0
     _tz_input = st.selectbox(
-        "Timezone",
-        options=_tz_options,
-        format_func=_fmt_tz,
-        index=_tz_idx,
-        key="cal_tz_input",
-        label_visibility="collapsed",
+        "Timezone", options=_tz_options, format_func=_fmt_tz,
+        index=_tz_idx, key="cal_tz_input", label_visibility="collapsed",
     )
-    st.caption("Event times from the JSON are assumed to be UTC and converted to this timezone for display.")
+    st.caption("All event times are stored as UTC internally and converted to this timezone for display.")
     if st.button("Save timezone", key="cal_save_tz"):
         settings["calendar_display_tz"] = _tz_input
         config.save_settings(settings)
         st.success(f"Timezone saved — events will display in {_fmt_tz(_tz_input)}.")
+
+    # ── Calendar accounts (multi-source) ─────────────────────────────────────
+    st.divider()
+    st.markdown("**Calendar accounts**")
+    if _mode == "offline":
+        st.caption("Offline mode — only **JSON file** calendars are active. Switch to Online mode to use iCal or Microsoft 365 sources.")
+    else:
+        st.caption("Add as many calendars as you like — events from all enabled accounts are merged, colour-coded by source.")
+
+    import uuid as _uuid
+    _cal_accs: list[dict] = settings.get("calendar_accounts", [])
+
+    # ── Account list ──────────────────────────────────────────────────────────
+    for _acc in _cal_accs:
+        _aid   = _acc["id"]
+        _atype = _acc.get("type", "ical")
+        _type_badge = {"ical": "iCal", "graph": "365", "json": "JSON"}.get(_atype, _atype)
+
+        _ra, _rb, _rc, _rd, _re = st.columns([0.4, 3.5, 1, 0.9, 0.9])
+        _is_offline_disabled = (_mode == "offline" and _atype != "json")
+        _dot_color = "#aaa" if _is_offline_disabled else _acc.get("color", "#4a6cf7")
+        _ra.markdown(
+            f'<span style="font-size:22px;color:{_dot_color}">●</span>',
+            unsafe_allow_html=True,
+        )
+        _name_style = "color:#aaa" if _is_offline_disabled else ""
+        _offline_note = " *(offline — inactive)*" if _is_offline_disabled else ""
+        _rb.markdown(
+            f'<span style="{_name_style}">**{_acc["name"]}** &nbsp; `{_type_badge}`{_offline_note}</span>',
+            unsafe_allow_html=True,
+        )
+        _new_enabled = _rc.checkbox(
+            "On", value=_acc.get("enabled", True),
+            key=f"acc_en_{_aid}", label_visibility="collapsed"
+        )
+        if _new_enabled != _acc.get("enabled", True):
+            _acc["enabled"] = _new_enabled
+            config.save_settings(settings)
+            st.rerun()
+        if _rd.button("Edit", key=f"acc_edit_{_aid}"):
+            st.session_state["_cal_editing_id"] = _aid
+            st.rerun()
+        if _re.button("Delete", key=f"acc_del_{_aid}", type="secondary"):
+            settings["calendar_accounts"] = [a for a in _cal_accs if a["id"] != _aid]
+            config.save_settings(settings)
+            calendar_online.invalidate_account_cache(_aid)
+            st.rerun()
+
+    # ── Edit form (inline, shown when a row's Edit button is clicked) ─────────
+    _editing_id = st.session_state.get("_cal_editing_id")
+    _editing_acc = next((a for a in _cal_accs if a["id"] == _editing_id), None) if _editing_id and _editing_id != "new" else None
+
+    if _editing_id:
+        _is_new  = (_editing_id == "new")
+        _ea_type = st.session_state.get("_cal_new_type", _editing_acc.get("type", "ical") if _editing_acc else "ical")
+        with st.container(border=True):
+            st.markdown("**Edit calendar**" if not _is_new else "**Add calendar**")
+            _ef1, _ef2, _ef3 = st.columns([3, 1.5, 1])
+            _ea_name  = _ef1.text_input("Name", value=_editing_acc["name"] if _editing_acc else "",
+                                        placeholder="My Calendar", key="ea_name")
+            _type_map = (
+                {"JSON file": "json"}
+                if _mode == "offline"
+                else {"iCal URL": "ical", "Microsoft 365": "graph", "JSON file": "json"}
+            )
+            _type_rev = {v: k for k, v in _type_map.items()}
+            _ea_type_safe = _ea_type if _ea_type in _type_map.values() else list(_type_map.values())[0]
+            _ea_type_label = _ef2.selectbox("Type", list(_type_map.keys()),
+                                            index=list(_type_map.values()).index(_ea_type_safe),
+                                            key="ea_type_sel")
+            _ea_type = _type_map[_ea_type_label]
+            st.session_state["_cal_new_type"] = _ea_type
+            _default_color = (
+                _editing_acc.get("color", "#4a6cf7") if _editing_acc
+                else calendar_online.next_account_color(_cal_accs)
+            )
+            _ea_color = _ef3.color_picker("Colour", value=_default_color, key="ea_color")
+
+            if _ea_type == "ical":
+                _ea_url  = st.text_input("iCal URL", value=_editing_acc.get("url","") if _editing_acc else "",
+                                         placeholder="https://…/feed.ics or webcal://…", key="ea_url")
+                _eac1, _eac2 = st.columns(2)
+                _ea_user = _eac1.text_input("Username (iCloud only)", value=_editing_acc.get("username","") if _editing_acc else "",
+                                             placeholder="you@icloud.com", key="ea_user")
+                _ea_pass = _eac2.text_input("App-specific password", value=_editing_acc.get("password","") if _editing_acc else "",
+                                             type="password", key="ea_pass")
+            elif _ea_type == "graph":
+                _ea_cid  = st.text_input(
+                    "Azure Client ID", key="ea_cid",
+                    value=_editing_acc.get("client_id","") if _editing_acc else settings.get("imap",{}).get("client_id",""),
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                )
+                _eg1, _eg2 = st.columns(2)
+                _ea_days_back = _eg1.number_input("Days back",    1, 365, int(_editing_acc.get("days_back",30))    if _editing_acc else 30,  key="ea_days_back")
+                _ea_days_fwd  = _eg2.number_input("Days forward", 1, 365, int(_editing_acc.get("days_forward",90)) if _editing_acc else 90, key="ea_days_fwd")
+                _ea_token = _editing_acc.get("access_token","") if _editing_acc else ""
+            elif _ea_type == "json":
+                _ea_path = st.text_input("JSON file path", value=_editing_acc.get("path","") if _editing_acc else "",
+                                          placeholder="/Users/you/events.json", key="ea_path")
+
+            _sv_col, _ts_col, _cn_col = st.columns([1.2, 1.2, 1])
+            with _sv_col:
+                if st.button("Save", key="ea_save", type="primary"):
+                    if not _ea_name.strip():
+                        st.error("Enter a name.")
+                    else:
+                        _new_acc: dict = {
+                            "id":      _editing_acc["id"] if _editing_acc else _uuid.uuid4().hex[:8],
+                            "name":    _ea_name.strip(),
+                            "type":    _ea_type,
+                            "color":   _ea_color,
+                            "enabled": _editing_acc.get("enabled", True) if _editing_acc else True,
+                        }
+                        if _ea_type == "ical":
+                            _new_acc.update({"url": _ea_url.strip(), "username": _ea_user.strip(), "password": _ea_pass})
+                        elif _ea_type == "graph":
+                            _new_acc.update({
+                                "client_id":     _ea_cid.strip(),
+                                "access_token":  _ea_token,
+                                "days_back":     int(_ea_days_back),
+                                "days_forward":  int(_ea_days_fwd),
+                            })
+                        elif _ea_type == "json":
+                            _new_acc["path"] = _ea_path.strip()
+
+                        if _editing_acc:
+                            settings["calendar_accounts"] = [
+                                _new_acc if a["id"] == _editing_acc["id"] else a
+                                for a in _cal_accs
+                            ]
+                            calendar_online.invalidate_account_cache(_new_acc["id"])
+                        else:
+                            settings.setdefault("calendar_accounts", []).append(_new_acc)
+
+                        config.save_settings(settings)
+                        st.session_state.pop("_cal_editing_id", None)
+                        st.session_state.pop("_cal_new_type", None)
+                        st.success("Saved.")
+                        st.rerun()
+
+            # Test button — iCal only
+            if _ea_type == "ical":
+                with _ts_col:
+                    if st.button("Test fetch", key="ea_test"):
+                        with st.spinner("Fetching…"):
+                            _t_evs, _t_err = calendar_online.fetch_ical(
+                                st.session_state.get("ea_url","").strip(),
+                                st.session_state.get("ea_user","").strip(),
+                                st.session_state.get("ea_pass",""),
+                                ttl=0,
+                            )
+                        if _t_err:
+                            st.error(f"Error: {_t_err}")
+                        else:
+                            st.success(f"✓ {len(_t_evs)} event(s) found.")
+
+            # Microsoft 365 auth flow
+            if _ea_type == "graph":
+                _has_tok = bool(_editing_acc.get("access_token") if _editing_acc else False)
+                if _has_tok:
+                    st.success("✓ Access token stored")
+                    if st.button("Re-authenticate", key="ea_graph_reauth"):
+                        if _editing_acc:
+                            _editing_acc.pop("access_token", None)
+                            _editing_acc.pop("refresh_token", None)
+                            config.save_settings(settings)
+                        for _k in ["_ea_graph_flow", "_ea_graph_cid"]:
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                else:
+                    if "_ea_graph_flow" not in st.session_state:
+                        if st.button("Sign in with Microsoft", key="ea_graph_signin"):
+                            _cid_val = st.session_state.get("ea_cid","").strip()
+                            if not _cid_val:
+                                st.error("Enter the Azure Client ID first.")
+                            else:
+                                with st.spinner("Contacting Microsoft…"):
+                                    _ea_flow, _ea_ferr = calendar_online.start_graph_device_flow(_cid_val)
+                                if _ea_ferr:
+                                    st.error(f"Error: {_ea_ferr}")
+                                else:
+                                    st.session_state["_ea_graph_flow"] = _ea_flow
+                                    st.session_state["_ea_graph_cid"]  = _cid_val
+                                    st.rerun()
+                    else:
+                        _ea_flow = st.session_state["_ea_graph_flow"]
+                        st.info(
+                            f"Go to [{_ea_flow.get('verification_uri','')}]({_ea_flow.get('verification_uri','')})  \n"
+                            f"Enter code **`{_ea_flow.get('user_code','')}`**, then click **Complete**."
+                        )
+                        if st.button("Complete sign-in", key="ea_graph_complete"):
+                            with st.spinner("Waiting…"):
+                                _ea_result, _ea_rerr = calendar_online.complete_graph_device_flow(
+                                    st.session_state.get("_ea_graph_cid",""), _ea_flow
+                                )
+                            if _ea_rerr:
+                                st.error(f"Error: {_ea_rerr}")
+                            else:
+                                # Store token in the account being edited so Save picks it up
+                                st.session_state["_ea_graph_token"]  = _ea_result.get("access_token","")
+                                st.session_state["_ea_graph_rtoken"] = _ea_result.get("refresh_token","")
+                                for _k in ["_ea_graph_flow", "_ea_graph_cid"]:
+                                    st.session_state.pop(_k, None)
+                                st.success("Authenticated — click **Save** to store the account.")
+                                st.rerun()
+                        if st.button("Cancel sign-in", key="ea_graph_cancel"):
+                            st.session_state.pop("_ea_graph_flow", None)
+                            st.rerun()
+
+            with _cn_col:
+                if st.button("Cancel", key="ea_cancel"):
+                    st.session_state.pop("_cal_editing_id", None)
+                    st.session_state.pop("_cal_new_type", None)
+                    st.rerun()
+
+    # Patch in any just-acquired Graph token before Save is clicked
+    if st.session_state.get("_ea_graph_token") and _editing_id and _editing_id != "new":
+        _ea_token = st.session_state.get("_ea_graph_token", "")
+
+    # ── Add account button ────────────────────────────────────────────────────
+    if not _editing_id:
+        if st.button("＋ Add calendar account", key="cal_add_acc"):
+            st.session_state["_cal_editing_id"] = "new"
+            st.session_state.pop("_cal_new_type", None)
+            st.rerun()
+
+    # ── Global refresh interval ───────────────────────────────────────────────
+    st.divider()
+    _ref_min_cur = int(settings.get("cal_refresh_minutes", 15))
+    _ref_min_in  = st.number_input(
+        "Auto-refresh all calendars every (minutes)", min_value=5, max_value=1440,
+        value=_ref_min_cur, key="cal_refresh_min_in",
+    )
+    if st.button("Save refresh interval", key="cal_save_refresh"):
+        settings["cal_refresh_minutes"] = int(_ref_min_in)
+        config.save_settings(settings)
+        st.success("Saved.")
 
     # ── Database (always shown) ───────────────────────────────────────────────
     st.divider()

@@ -263,10 +263,7 @@ def render_month_html(year: int, month: int, events: list[dict]) -> tuple[str, i
 .ev-chip { display: block; border-radius: 3px; padding: 1px 5px;
            font-size: 10px; line-height: 1.5; margin-bottom: 2px;
            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-           cursor: default; }
-.ev-future { background: #4a6cf7; color: #fff; }
-.ev-today  { background: #1a3fba; color: #fff; }
-.ev-past   { background: #b0b8c8; color: #fff; }
+           cursor: default; color: #fff; }
 .ev-more   { font-size: 10px; color: #4a6cf7; padding-left: 3px; }
 </style>
 """
@@ -289,23 +286,26 @@ def render_month_html(year: int, month: int, events: list[dict]) -> tuple[str, i
             if is_today:
                 cell_cls = "today"
                 num_cls  = "today-num"
-                chip_cls = "ev-chip ev-today"
             elif is_past:
                 cell_cls = "past"
                 num_cls  = "past-num"
-                chip_cls = "ev-chip ev-past"
             else:
                 cell_cls = ""
                 num_cls  = ""
-                chip_cls = "ev-chip ev-future"
 
             day_evs = event_map.get(d, [])
             chips = ""
             for ev in day_evs[:3]:
-                t = fmt_time(ev["start_dt"])
-                label = ev["subject"][:20] + ("…" if len(ev["subject"]) > 20 else "")
+                t      = fmt_time(ev["start_dt"])
+                label  = ev["subject"][:20] + ("…" if len(ev["subject"]) > 20 else "")
                 prefix = f"{t} " if t else ""
-                chips += f'<span class="{chip_cls}" title="{ev["subject"]}">{prefix}{label}</span>'
+                color  = ev.get("_account_color", "#4a6cf7")
+                opacity = "0.45" if is_past else "1"
+                chip_style = f"background:{color};opacity:{opacity}"
+                chips += (
+                    f'<span class="ev-chip" style="{chip_style}" title="{ev["subject"]}">'
+                    f'{prefix}{label}</span>'
+                )
             if len(day_evs) > 3:
                 chips += f'<span class="ev-more">+{len(day_evs) - 3} more</span>'
 

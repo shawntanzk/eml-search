@@ -1,6 +1,6 @@
 # EML Search
 
-A fully offline Streamlit app for indexing, searching, and analysing emails. Pull from a local folder of `.eml` backup files **or connect directly to an IMAP server** — no exports needed. No cloud services, no LLMs — everything runs on your machine.
+A fully local Streamlit app for indexing, searching, and analysing emails — with a live calendar view that links events to related emails. Pull from a local folder of `.eml` files **or connect directly to an IMAP server** — no cloud services, no LLMs, everything runs on your machine.
 
 ---
 
@@ -19,6 +19,8 @@ A fully offline Streamlit app for indexing, searching, and analysing emails. Pul
 | **Tag management** | Human-defined tag library with manual assignment and NLP auto-classification |
 | **NLP auto-classification** | Assign tags via **Semantic** (sentence-transformers) or **TF-IDF** (no ML needed) |
 | **Knowledge graph** | RDF/OWL graph with SPARQL console and interactive pyvis visualisation |
+| **Calendar tab** | Month + week + list views linked to your email archive — see related emails for any event |
+| **Live calendar sync** | Pull events from iCal URL, Apple iCloud, Google Calendar, Outlook.com, or Microsoft 365 Graph API |
 | **Graceful degradation** | Runs with FTS-only search even if spaCy or sentence-transformers are unavailable |
 
 ---
@@ -39,13 +41,13 @@ pip install -r requirements.txt
 
 ### Step 2 — Download NLP models
 
-This is a one-time download (~100 MB total). It also initialises the database.
+One-time download (~100 MB). Also initialises the database.
 
 ```bash
 python setup_models.py
 ```
 
-You should see:
+Expected output:
 
 ```
 Downloading spaCy model...       ✓
@@ -53,7 +55,7 @@ Downloading sentence-transformer... ✓
 Database initialised.
 ```
 
-If you have a local folder of `.eml` files and want to index them right away:
+To index a local `.eml` folder right away:
 
 ```bash
 python setup_models.py --folder /path/to/your/eml/folder
@@ -69,43 +71,34 @@ Opens at **http://localhost:8501**.
 
 ---
 
-### Step 4 — Connect your email (IMAP)
+## Connect Your Email (IMAP)
 
-If you want to pull directly from Gmail, Outlook, or any IMAP server:
+### Get an app password first
 
-**Before you open the app — get an app password:**
+| Provider | Where to get it |
+|---|---|
+| Gmail | [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) — needs 2-Step Verification |
+| Outlook / Microsoft 365 | [account.microsoft.com/security](https://account.microsoft.com/security) → Advanced security → App passwords |
+| iCloud | [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords |
+| Other | Use your normal password if no app password required |
 
-- **Gmail:** Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). You need 2-Step Verification enabled. Generate a password for "Mail". Copy it — you only see it once.
-- **Outlook / Microsoft 365:** Go to [account.microsoft.com/security](https://account.microsoft.com/security) → Advanced security → App passwords.
-- **iCloud:** Go to [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords.
-- **Other providers:** Use your normal password if your server doesn't require app passwords.
+### In the app — Settings → IMAP connection
 
-**In the app — Settings tab → IMAP connection:**
-
-| Field | What to enter |
+| Field | Value |
 |---|---|
 | IMAP host | `imap.gmail.com` / `imap-mail.outlook.com` / `imap.mail.me.com` |
-| Email address | Your full email address |
-| Password / app password | The app password you just generated |
-| Port | `993` (leave as-is for all major providers) |
-| Use SSL | Checked (leave as-is) |
-| Mailbox | `INBOX` to start — you can change this later |
+| Email address | Your full email |
+| Password | The app password |
+| Port | `993` |
+| Mailbox | `INBOX` |
 
 1. Click **Save IMAP settings**
-2. Click **Test connection** — you should see "Connected successfully"
-3. Scroll down to **Fetch emails via IMAP**
-4. Set **Max emails** to something larger than your inbox (e.g. `20000`)
-5. Click **Fetch & index emails**
+2. Click **Test connection** — should show "Connected successfully"
+3. Scroll to **Fetch emails via IMAP**, set **Max emails**, click **Fetch & index emails**
 
-A live status line will update as it works through your archive. For 15k emails expect this to take **30–90 minutes** — the bottleneck is the NLP pipeline (NER + embedding), not the network. You can leave it running and use the Search tab in parallel once a few thousand emails are indexed.
+For 15k emails expect 30–90 minutes — the bottleneck is the NLP pipeline, not the network. Already-indexed emails are always skipped.
 
-> Already-indexed emails are always skipped, so re-running is safe and resumes where it left off if interrupted.
-
----
-
-## IMAP Reference
-
-### Supported servers
+### IMAP host reference
 
 | Provider | Host | Port |
 |---|---|---|
@@ -116,38 +109,171 @@ A live status line will update as it works through your archive. For 15k emails 
 | Self-hosted (SSL) | your server | 993 |
 | Self-hosted (no SSL) | your server | 143 |
 
-### Fetching multiple mailboxes
+---
 
-After the initial INBOX fetch, go back to Settings → Fetch emails via IMAP, change the **Mailbox** field, and run again. Common values:
+## Calendar
 
-- Gmail: `[Gmail]/Sent Mail`, `[Gmail]/All Mail`
-- Outlook: `Sent Items`
-- Generic: `Sent`, `Archive`
+The Calendar tab shows a month view, week view, and list view of your events, and automatically finds emails related to any selected event — ranked by attendee overlap, subject match, semantic similarity, and tags.
 
-Each run only fetches UIDs not already in the database, so there's no duplication.
+You can connect as many calendars as you like. Events from all sources are merged into one view and colour-coded by calendar — the same way Apple Calendar works.
 
-### Credential storage
+> **Offline mode** — only JSON file calendars are active. iCal and Microsoft 365 accounts are silently skipped. Switch to Online mode in Settings to enable them.
 
-IMAP credentials are saved to `data/settings.json` on your local machine. This file is listed in `.gitignore` and never leaves your machine. The password field in the UI can be left blank when saving other settings — it will keep the previously saved password.
+---
 
-### Advanced: scripted / programmatic use
+### How to add a calendar
 
-```python
-from modules.imap_connector import IMAPConnector
+All calendar management is in **Settings → Calendar accounts**:
 
-conn = IMAPConnector("imap.gmail.com", "you@gmail.com", "app-password")
+1. Click **＋ Add calendar account**
+2. Enter a **Name** (e.g. "Google Work"), choose a **Type**, pick a **colour**
+3. Fill in the type-specific fields (see guides below)
+4. Click **Save**
 
-# One-shot — handles 15k+ emails
-result = conn.fetch_and_index(mailbox="INBOX")
-# {"indexed": 14823, "skipped": 0, "errors": 0, "total_in_db": 14823}
+Repeat for as many calendars as you want. Each one gets its own colour dot in the month, week, and list views. You can enable/disable any account without deleting it.
 
-# Multiple mailboxes
-for mailbox in ["INBOX", "[Gmail]/Sent Mail"]:
-    conn.fetch_and_index(mailbox=mailbox)
+---
 
-# Background polling (keeps index live)
-conn.start(mailbox="INBOX", interval=300)
-```
+### Connect Google Calendar
+
+**Get the secret iCal link:**
+
+1. Go to [calendar.google.com](https://calendar.google.com) → click the gear icon → **Settings**
+2. In the left sidebar, click the calendar you want under **Settings for my calendars**
+3. Scroll down to **Integrate calendar**
+4. Copy the **Secret address in iCal format** — it looks like:
+   ```
+   https://calendar.google.com/calendar/ical/youraddress%40gmail.com/private-xxxxxxxx/basic.ics
+   ```
+
+> This URL is private and acts as your password — don't share it. No username or password needed.
+
+**Add to the app:**
+
+1. Settings → Calendar accounts → **＋ Add calendar account**
+2. Name: `Google Calendar` (or whatever you like)
+3. Type: **iCal URL**
+4. iCal URL: paste the link from step 4 above
+5. Leave username and password blank
+6. Click **Test fetch** to verify, then **Save**
+
+To add multiple Google calendars (personal, work, shared), repeat this for each one — each has its own secret iCal link in Google Calendar Settings.
+
+---
+
+### Connect Apple Calendar (iCloud)
+
+**Get the iCloud feed URL:**
+
+1. On your Mac: open **Calendar** → right-click the calendar in the sidebar → **Share Calendar…**
+   - Or on [icloud.com](https://www.icloud.com/calendar): click the broadcast icon next to a calendar
+2. Tick **Public Calendar** — a `webcal://` URL appears. Copy it.
+   (The app automatically converts `webcal://` → `https://`, so you can paste it as-is.)
+
+> **iCloud requires an app-specific password** — the regular iCloud password won't work for URL-based access.
+>
+> 1. Go to [appleid.apple.com](https://appleid.apple.com) → **Sign-In and Security** → **App-Specific Passwords**
+> 2. Click **+** → name it "EML Search" → copy the generated password (shown only once)
+
+**Add to the app:**
+
+1. Settings → Calendar accounts → **＋ Add calendar account**
+2. Name: `iCloud Calendar`
+3. Type: **iCal URL**
+4. iCal URL: paste the `webcal://` or `https://` link
+5. Username: your iCloud email (e.g. `you@icloud.com`)
+6. App-specific password: the password you generated above
+7. Click **Test fetch** to verify, then **Save**
+
+To add multiple iCloud calendars (each calendar has its own share URL), repeat for each one.
+
+---
+
+### Connect Outlook Calendar (Outlook.com / personal Microsoft account)
+
+**Get the ICS link:**
+
+1. Go to [outlook.live.com](https://outlook.live.com) → **Calendar**
+2. Click the gear icon → **View all Outlook settings** → **Calendar** → **Shared calendars**
+3. Under **Publish a calendar**, choose your calendar, set permission to **Can view all details**, click **Publish**
+4. Copy the **ICS** link that appears
+
+**Add to the app:**
+
+1. Settings → Calendar accounts → **＋ Add calendar account**
+2. Name: `Outlook Calendar`
+3. Type: **iCal URL**
+4. iCal URL: paste the ICS link
+5. Leave username and password blank
+6. Click **Test fetch** to verify, then **Save**
+
+---
+
+### Connect Microsoft 365 / Work Outlook (Graph API)
+
+This uses OAuth2 device-code sign-in — no redirect URL needed. You can reuse the Azure App Registration already set up for IMAP email.
+
+#### Step A — Azure App Registration (skip if already done for IMAP)
+
+1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory** → **App registrations** → **New registration**
+2. Name: `EML Search` (or anything)
+3. Supported account types: **Personal Microsoft accounts only** (or multi-tenant if needed)
+4. No redirect URI needed — click **Register**
+5. Copy the **Application (Client) ID**
+
+#### Step B — Add the Calendar permission
+
+1. In your app registration → **API permissions** → **Add a permission**
+2. Choose **Microsoft Graph** → **Delegated permissions**
+3. Search **Calendars.Read** → tick it → **Add permissions**
+4. Click **Grant admin consent** if your org requires it
+
+> Already set up IMAP? Your app registration already exists — just add `Calendars.Read` to it in step B.
+
+#### Step C — Add to the app
+
+1. Settings → Calendar accounts → **＋ Add calendar account**
+2. Name: `Work Outlook`
+3. Type: **Microsoft 365**
+4. Azure Client ID: paste from Step A
+5. Set **Days back** and **Days forward** (e.g. 30 / 90)
+6. Click **Sign in with Microsoft** — you'll get a short code
+7. Go to [microsoft.com/devicelogin](https://microsoft.com/devicelogin), enter the code, and approve
+8. Back in the app, click **Complete sign-in**, then **Save**
+
+Events are cached for the configured refresh interval (default 15 min). Use **🔄 Refresh** in the Calendar tab to force an immediate re-fetch.
+
+---
+
+### Other calendar apps
+
+Any app that publishes an `.ics` URL can be added as an **iCal URL** account:
+
+| App | Where to find the URL |
+|---|---|
+| Fantastical / BusyCal | Calendar sharing settings → "Subscribe" link |
+| Exchange on-premise | OWA → Calendar → Share → Copy ICS link (or ask IT) |
+| Nextcloud | Right-click calendar → Copy private link (change `webcal://` → `https://`) |
+| Fastmail | Settings → Calendar → Manage → Share → ICS link |
+| Any CalDAV server | Check your server's calendar export/subscribe options |
+
+---
+
+### Related email ranking
+
+When you select an event, the app finds the most relevant emails in your archive using:
+
+| Signal | Weight |
+|---|---|
+| 👥 Attendee/organiser email directly matches sender, recipient, or CC | Highest — 0.50 boost |
+| 📝 Subject keyword match (FTS on event title) | High — 2× RRF weight |
+| 🔍 Semantic match on invite text | Standard RRF weight |
+| 🏷 Named entity overlap (people/orgs in invite vs emails) | Low |
+| 🔖 Tag keyword match | Low |
+
+Your own email address is automatically excluded from attendee matching (configure under **Settings → Calendar → My email address**).
+
+Each result shows which signals matched, so you can see exactly why an email was surfaced.
 
 ---
 
@@ -156,33 +282,21 @@ conn.start(mailbox="INBOX", interval=300)
 `sentence-transformers` (and `torch`) do not yet have pre-built wheels for Python 3.14. The app handles this gracefully:
 
 - **FTS search** works normally without any ML packages.
-- **Semantic / hybrid search** modes are hidden from the UI if `sentence-transformers` is unavailable.
-- **NLP auto-classification** falls back to the TF-IDF method (no ML dependencies).
+- **Semantic / hybrid search** modes are hidden if `sentence-transformers` is unavailable.
+- **NLP auto-classification** falls back to TF-IDF (no ML dependencies).
 - **Keyword extraction and NER** are silently skipped if the spaCy model is missing.
-- The **sidebar** shows a warning for each unavailable component.
 
 ### SSL / cert-restricted networks
 
 If `pip install` or model downloads fail due to SSL errors, pre-packaged model bundles are on [GitHub Releases (models-v1)](https://github.com/shawntanzk/eml-search/releases/tag/models-v1). `setup_models.py` will fall back to these automatically.
 
-Manual install:
-
 ```bash
-# spaCy model (12 MB) — into your venv:
+# spaCy model (12 MB):
 tar -xzf en_core_web_sm-3.8.0.tar.gz -C .venv/lib/python3.*/site-packages/
 
-# Sentence-transformer model (80 MB) — into HuggingFace cache:
+# Sentence-transformer model (80 MB):
 tar -xzf all-MiniLM-L6-v2.tar.gz -C ~/.cache/huggingface/hub/
 ```
-
----
-
-## Model Locations
-
-| Model | Location |
-|---|---|
-| spaCy `en_core_web_sm` | `<venv>/lib/python3.*/site-packages/en_core_web_sm/` |
-| sentence-transformers `all-MiniLM-L6-v2` | `~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/` |
 
 ---
 
@@ -190,7 +304,7 @@ tar -xzf all-MiniLM-L6-v2.tar.gz -C ~/.cache/huggingface/hub/
 
 ```
 eml_search_app/
-├── app.py                   # Streamlit UI — 4 tabs: Search, Tags, Knowledge Graph, Settings
+├── app.py                   # Streamlit UI — Search, Tags, Knowledge Graph, Calendar, Settings
 ├── config.py                # Paths, model names, thresholds
 ├── setup_models.py          # One-time setup: models → database → index
 ├── requirements.txt
@@ -199,7 +313,9 @@ eml_search_app/
 │   ├── eml_parser.py        # .eml file → structured dict (stdlib only)
 │   ├── indexer.py           # SQLite/FTS5 CRUD
 │   ├── watcher.py           # Background folder watcher + indexing pipeline
-│   ├── imap_connector.py    # IMAP ingestion — fetch from live server, same pipeline as watcher
+│   ├── imap_connector.py    # IMAP ingestion — fetch from live server
+│   ├── calendar_reader.py   # Calendar JSON loader, HTML/Streamlit renderer, email correlator
+│   ├── calendar_online.py   # Live calendar fetch — iCal URL + Microsoft Graph API
 │   ├── nlp_engine.py        # spaCy NER + keyword extraction (optional)
 │   ├── semantic_search.py   # Sentence-transformer embed + cosine search (optional)
 │   ├── tfidf_classifier.py  # Pure Python/numpy TF-IDF classifier (always available)
@@ -214,7 +330,7 @@ eml_search_app/
 │   ├── index.db             # SQLite index (WAL mode)
 │   ├── email_data.ttl       # ABox — generated RDF instance data
 │   ├── graph_preview.html   # Temp file for pyvis graph render
-│   └── settings.json        # Persisted settings incl. IMAP credentials
+│   └── settings.json        # Persisted settings incl. credentials
 │
 └── test_emails/             # 100 synthetic .eml files for development/testing
 ```
@@ -232,114 +348,27 @@ Source A: .eml file          Source B: IMAP server
 eml_parser.parse_eml()       imap_connector._parse_message()
          │                              │
          └──────────────┬───────────────┘
-                        │
+                        ▼
                   structured dict
-                  {id, file_path, subject, sender, body_text, …}
+                  {id, subject, sender, body_text, …}
                         │
                         ▼
-1. indexer.insert_email()
-   Writes to `emails` table. FTS5 trigger indexes tokens automatically.
-   IMAP emails get a virtual file_path: imap://host/mailbox/uid
-    │
-    ▼
-2. nlp_engine.extract_entities()   [skipped if spaCy model missing]
-   en_core_web_sm NER → PERSON, ORG, GPE, LOC stored in `email_entities`
-    │
-    ▼
-3. semantic_search.embed_batch()   [skipped if sentence-transformers missing]
-   all-MiniLM-L6-v2 — batched for efficiency (64 emails per model pass)
-   384-dim float32 vectors stored as BLOB in `embeddings`
+1. indexer.insert_email()          — SQLite + FTS5 trigger
+2. nlp_engine.extract_entities()   — NER [optional]
+3. semantic_search.embed_batch()   — embeddings [optional]
 ```
-
-**Local folder** — `EmailWatcher` daemon thread, polls every 10 seconds.
-
-**IMAP** — `IMAPConnector` fetches 100 UIDs per round trip, batches embeddings 64 at a time. After the first full run, subsequent polls only ask the server for UIDs newer than the last seen (cached max UID), so polling a large mailbox is cheap.
-
----
 
 ### Search
 
-#### Full-Text Search
-SQLite FTS5 + Porter stemmer, BM25 ranking. Always available.
-
-#### Semantic Search
-Query embedded by the same model used at index time. Dot product against the embedding matrix, O(n) top-k via `numpy.argpartition`. Requires `sentence-transformers`.
-
-#### Hybrid Search (default)
-Reciprocal Rank Fusion merges FTS and semantic rankings:
-```
-score(d) = Σ  1 / (k + rank_i(d))
-```
-Falls back to FTS if `sentence-transformers` is unavailable.
-
----
-
-### Tags
-
-**Manual assignment** — add or remove per email in the Search tab. Manually removed tags are permanently blocked from NLP re-assignment for that email.
-
-**NLP auto-classification** — runs from the Tags tab:
-
-| Method | Dependencies | Default threshold |
-|---|---|---|
-| **Semantic** | sentence-transformers | 0.25 |
-| **TF-IDF** | numpy only (always available) | 0.15 |
-
-Both only add, never remove. Per-tag method and threshold are configurable.
-
----
-
-### Knowledge Graph (RDF/OWL)
-
-| File | Contents | Editable? |
-|---|---|---|
-| `ontology/email_ontology.ttl` | TBox — classes, properties, axioms | Yes |
-| `data/email_data.ttl` | ABox — individuals from indexed emails | No — rebuilt on demand |
-
-Click **Build / Rebuild Graph** to regenerate the ABox.
-
-**Ontology classes:**
-```
-owl:Thing
- ├── ont:Email           — one individual per indexed email
- ├── ont:Person          — senders, recipients, NER-extracted people
- ├── ont:Organization    — NER-extracted ORG entities
- ├── ont:Location        — NER-extracted GPE/LOC entities
- ├── ont:Tag             — one individual per defined tag
- └── ont:Thread          — one individual per unique thread root
-```
-
-**SPARQL example:**
-```sparql
-PREFIX ont: <http://emailsearch.local/ontology#>
-
-SELECT ?subject ?sender
-WHERE {
-  ?email a ont:Email ;
-         ont:hasSubject ?subject ;
-         ont:hasSender ?person .
-  ?person ont:emailAddress ?sender .
-  FILTER(CONTAINS(?sender, "example.com"))
-}
-LIMIT 20
-```
-
----
-
-### Database Schema
-
-| Table | Purpose |
+| Mode | How |
 |---|---|
-| `emails` | Core email metadata and body text |
-| `emails_fts` | FTS5 virtual table (Porter stemmer, auto-synced via triggers) |
-| `email_entities` | NER results (email_id, entity_text, entity_label) |
-| `embeddings` | float32 sentence-transformer vectors as BLOB |
-| `tags` | Tag library (id, name, nlp_method, nlp_threshold) |
-| `email_tags` | Tag assignments (email_id, tag_id, source: 'manual'\|'nlp') |
-| `email_tag_blocks` | Blocks NLP from re-adding manually removed tags |
-| `meta` | Key-value store — incl. cached IMAP max UIDs |
+| **Full-text** | SQLite FTS5 + Porter stemmer, BM25 ranking |
+| **Semantic** | Query embedded; dot product against embedding matrix |
+| **Hybrid** | Reciprocal Rank Fusion of FTS + semantic rankings |
 
-SQLite runs in **WAL mode** so the background indexer can write while Streamlit reads.
+### Calendar
+
+Events from any source (JSON / iCal URL / Graph API) are normalised to the same internal format. Times are stored as UTC and converted to your chosen display timezone. The event correlator uses a multi-signal RRF approach to surface related emails.
 
 ---
 
@@ -351,38 +380,9 @@ All tuneable values in `config.py`:
 |---|---|---|
 | `SPACY_MODEL` | `en_core_web_sm` | spaCy model name |
 | `SENTENCE_TRANSFORMER_MODEL` | `all-MiniLM-L6-v2` | Embedding model |
-| `SEMANTIC_TOP_K` | `100` | Candidates retrieved by semantic search |
-| `MAX_SEARCH_RESULTS` | `200` | Hard cap on returned results |
+| `SEMANTIC_TOP_K` | `100` | Semantic search candidates |
+| `MAX_SEARCH_RESULTS` | `200` | Hard cap on results |
 | `WATCH_POLL_INTERVAL` | `10` | Seconds between folder polls |
-
----
-
-## Extending the Ontology
-
-Edit `ontology/email_ontology.ttl`, then click **Build / Rebuild Graph**. Example:
-
-```turtle
-ont:Project
-    a owl:Class ;
-    rdfs:label "Project" .
-
-ont:relatedToProject
-    a owl:ObjectProperty ;
-    rdfs:domain ont:Email ;
-    rdfs:range  ont:Project .
-```
-
-To populate the new property automatically, extend `build_abox()` in `modules/graph_builder.py`.
-
----
-
-## Test Data
-
-100 synthetic `.eml` files in `test_emails/` — useful for verifying setup without your real archive:
-
-```bash
-python setup_models.py --folder test_emails
-```
 
 ---
 
@@ -395,10 +395,19 @@ rdflib>=7.0.0
 pandas>=2.0.0
 pyvis>=0.3.2
 numpy>=1.24.0
+requests>=2.28.0
+msal>=1.20.0
+icalendar>=5.0.0
 ```
 
 Optional (app degrades gracefully without these):
 ```
 spacy>=3.7.0                 # NER and keyword extraction
-sentence-transformers>=2.7.0 # Semantic/hybrid search and semantic tag classification
+sentence-transformers>=2.7.0 # Semantic/hybrid search and NLP tag classification
 ```
+
+---
+
+## Credential Storage
+
+All credentials (IMAP password, OAuth2 tokens, iCal app password, Graph tokens) are saved to `data/settings.json` on your local machine. This file is listed in `.gitignore` and never leaves your machine.

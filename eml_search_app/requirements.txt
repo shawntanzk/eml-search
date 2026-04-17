@@ -10,3 +10,4 @@ pyvis>=0.3.2
 beautifulsoup4>=4.12.0
 numpy>=1.24.0
 msal>=1.20.0
+icalendar>=5.0.0
