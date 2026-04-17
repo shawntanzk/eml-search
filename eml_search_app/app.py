@@ -965,7 +965,9 @@ with tab_calendar:
         )
     else:
         # ── Load events ───────────────────────────────────────────────────────
-        _cal_events = calendar_reader.load_events(_cal_json_path)
+        _cal_display_tz = _cal_settings.get("calendar_display_tz", "Asia/Singapore")
+        _cal_events_raw = calendar_reader.load_events(_cal_json_path)
+        _cal_events = calendar_reader.convert_display_tz(_cal_events_raw, _cal_display_tz)
         _today = _date.today()
 
         if not _cal_events:
@@ -991,11 +993,12 @@ with tab_calendar:
             _m2.metric("This week",    len(_this_week))
             _m3.metric("Upcoming",     len(_upcoming))
             _m4.metric("Past",         len(_past))
+            st.caption(f"🌐 Displaying in **{_cal_display_tz}**  ·  Change in Settings → Calendar")
 
             st.divider()
 
             # ── View selector ─────────────────────────────────────────────────
-            _view_tab_cal, _view_tab_list = st.tabs(["📅 Month", "📋 List"])
+            _view_tab_cal, _view_tab_week, _view_tab_list = st.tabs(["📅 Month", "📆 Week", "📋 List"])
 
             # ── MONTH VIEW ────────────────────────────────────────────────────
             with _view_tab_cal:
@@ -1034,12 +1037,12 @@ with tab_calendar:
                         st.rerun()
 
                 # HTML calendar grid (visual only)
-                _month_html = calendar_reader.render_month_html(
+                _month_html, _month_height = calendar_reader.render_month_html(
                     st.session_state.cal_year,
                     st.session_state.cal_month,
                     _cal_events,
                 )
-                components.html(_month_html, height=480, scrolling=False)
+                components.html(_month_html, height=_month_height, scrolling=False)
 
                 # Event picker for this month
                 _month_evs = [
@@ -1066,6 +1069,70 @@ with tab_calendar:
                         st.session_state.pop("cal_list_pick", None)
                 else:
                     st.info("No events in this month.")
+
+            # ── WEEK VIEW ─────────────────────────────────────────────────────
+            with _view_tab_week:
+                if "cal_week_offset" not in st.session_state:
+                    st.session_state.cal_week_offset = 0
+
+                _wk_base = _today - _timedelta(days=_today.weekday())
+                _wk_start_w = _wk_base + _timedelta(weeks=st.session_state.cal_week_offset)
+                _wk_end_w   = _wk_start_w + _timedelta(days=6)
+
+                _wn_l, _wn_title, _wn_today, _wn_r = st.columns([1, 4, 1.2, 1])
+                with _wn_l:
+                    if st.button("◀", key="cal_prev_week"):
+                        st.session_state.cal_week_offset -= 1
+                        st.rerun()
+                with _wn_title:
+                    st.subheader(
+                        f"{_wk_start_w.strftime('%d %b')} – {_wk_end_w.strftime('%d %b %Y')}"
+                    )
+                with _wn_today:
+                    if st.button("Today", key="cal_goto_today_week"):
+                        st.session_state.cal_week_offset = 0
+                        st.rerun()
+                with _wn_r:
+                    if st.button("▶", key="cal_next_week"):
+                        st.session_state.cal_week_offset += 1
+                        st.rerun()
+
+                _week_days = [_wk_start_w + _timedelta(days=i) for i in range(7)]
+                _week_cols = st.columns(7)
+
+                # Day headers
+                for _wi, _wd in enumerate(_week_days):
+                    _is_today_w = _wd == _today
+                    _hdr = f"**{'📍 ' if _is_today_w else ''}{_wd.strftime('%a')}**"
+                    _num = f"**{_wd.day}**" if _is_today_w else str(_wd.day)
+                    _week_cols[_wi].markdown(f"{_hdr}  \n{_num}")
+
+                st.divider()
+
+                # Event cells
+                _week_cols2 = st.columns(7)
+                for _wi, _wd in enumerate(_week_days):
+                    _day_evs_w = [
+                        e for e in _cal_events
+                        if e["start_dt"] and e["start_dt"].date() == _wd
+                    ]
+                    with _week_cols2[_wi]:
+                        if not _day_evs_w:
+                            st.caption("—")
+                        for _ev_w in _day_evs_w:
+                            _t_w = calendar_reader.fmt_time(_ev_w["start_dt"])
+                            _lbl_w = (
+                                f"{_t_w}  \n{_ev_w['subject'][:22]}"
+                                + ("…" if len(_ev_w["subject"]) > 22 else "")
+                            )
+                            if st.button(
+                                _lbl_w,
+                                key=f"cal_week_ev_{_wd}_{_ev_w['id']}",
+                                use_container_width=True,
+                                help=_ev_w["subject"],
+                            ):
+                                st.session_state["cal_selected_event"] = _ev_w
+                                st.rerun()
 
             # ── LIST VIEW ─────────────────────────────────────────────────────
             with _view_tab_list:
@@ -1208,8 +1275,8 @@ with tab_calendar:
                 # ── Related emails ─────────────────────────────────────────
                 st.markdown("### 📧 Related emails")
                 st.caption(
-                    "Ranked by relevance — FTS on subject · semantic match on invite text · "
-                    "named entity overlap · tag keyword match · direct attendee/organiser email match."
+                    "Priority: 👥 Attendee/organiser overlap · 📝 Subject match · "
+                    "🔍 Semantic match on invite · 🏷 Entity · 🔖 Tag"
                 )
 
                 with st.spinner("Finding related emails…"):
@@ -1243,6 +1310,10 @@ with tab_calendar:
                                     f"  ·  {(_rem.get('date') or '')[:16]}"
                                     + ("  ·  📎" if _rem.get("has_attachments") else "")
                                 )
+                                # Show why this email was matched
+                                _signals = _rem.get("_match_signals", [])
+                                if _signals:
+                                    st.caption("Matched via: " + "  ·  ".join(_signals))
                                 # Show tags on this email
                                 _em_tags = tagger.get_email_tags(_rem["id"])
                                 if _em_tags:
@@ -1732,6 +1803,40 @@ with tab_settings:
             st.caption(f"✓ File found — {_events_count} event(s) loaded.")
         else:
             st.warning(f"File not found: `{_cal_path_current}`")
+
+    st.markdown("**Display timezone**")
+    _tz_options = [
+        "Asia/Singapore",
+        "UTC",
+        "Asia/Jakarta",
+        "Asia/Bangkok",
+        "Asia/Kuala_Lumpur",
+        "Asia/Tokyo",
+        "Asia/Shanghai",
+        "Asia/Hong_Kong",
+        "Asia/Seoul",
+        "Europe/London",
+        "Europe/Berlin",
+        "Europe/Paris",
+        "America/New_York",
+        "America/Chicago",
+        "America/Los_Angeles",
+        "Australia/Sydney",
+    ]
+    _current_tz = settings.get("calendar_display_tz", "Asia/Singapore")
+    _tz_idx = _tz_options.index(_current_tz) if _current_tz in _tz_options else 0
+    _tz_input = st.selectbox(
+        "Timezone",
+        options=_tz_options,
+        index=_tz_idx,
+        key="cal_tz_input",
+        label_visibility="collapsed",
+    )
+    st.caption("Event times from the JSON are assumed to be UTC and converted to this timezone for display.")
+    if st.button("Save timezone", key="cal_save_tz"):
+        settings["calendar_display_tz"] = _tz_input
+        config.save_settings(settings)
+        st.success(f"Timezone saved — events will display in {_tz_input}.")
 
     # ── Database (always shown) ───────────────────────────────────────────────
     st.divider()

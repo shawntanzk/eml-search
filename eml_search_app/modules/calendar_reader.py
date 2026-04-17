@@ -12,6 +12,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 _cache_lock = threading.Lock()
 _events_cache: list[dict] = []
@@ -130,6 +131,41 @@ def parse_dt(s: str) -> Optional[datetime]:
     return None
 
 
+def convert_display_tz(
+    events: list[dict],
+    display_tz: str = "Asia/Singapore",
+) -> list[dict]:
+    """
+    Return a new list of events with start_dt/end_dt converted from each
+    event's own time_zone field (default UTC) to display_tz.
+    The original event dicts are not mutated.
+    """
+    try:
+        dst = ZoneInfo(display_tz)
+    except Exception:
+        return events
+
+    result = []
+    for ev in events:
+        src_name = ev.get("time_zone") or "UTC"
+        try:
+            src = ZoneInfo(src_name)
+        except Exception:
+            src = ZoneInfo("UTC")
+
+        ev2 = dict(ev)
+        if ev2.get("start_dt"):
+            ev2["start_dt"] = (
+                ev2["start_dt"].replace(tzinfo=src).astimezone(dst).replace(tzinfo=None)
+            )
+        if ev2.get("end_dt"):
+            ev2["end_dt"] = (
+                ev2["end_dt"].replace(tzinfo=src).astimezone(dst).replace(tzinfo=None)
+            )
+        result.append(ev2)
+    return result
+
+
 # ── Filtering helpers ─────────────────────────────────────────────────────────
 
 def events_for_date(events: list[dict], d: date) -> list[dict]:
@@ -181,11 +217,12 @@ def fmt_duration(ev: dict) -> str:
 
 # ── HTML month calendar renderer ──────────────────────────────────────────────
 
-def render_month_html(year: int, month: int, events: list[dict]) -> str:
+def render_month_html(year: int, month: int, events: list[dict]) -> tuple[str, int]:
     """
     Render a month calendar as a self-contained HTML string.
     Events are shown as coloured chips inside each day cell.
     Past events are grey; today's events are dark blue; future events are blue.
+    Returns (html_str, height_px) where height_px is the recommended iframe height.
     """
     import calendar as _cal
 
@@ -216,7 +253,7 @@ def render_month_html(year: int, month: int, events: list[dict]) -> str:
 .ecal th { background: #f0f2f6; padding: 6px 4px; text-align: center;
            font-size: 12px; font-weight: 600; color: #555; border: 1px solid #e0e4ea; }
 .ecal td { vertical-align: top; border: 1px solid #e0e4ea;
-           padding: 4px 5px; height: 88px; width: 14.28%; }
+           padding: 4px 5px; min-height: 84px; height: auto; width: 14.28%; overflow: visible; }
 .ecal td.empty { background: #fafbfc; }
 .ecal td.today { background: #eef3ff; border: 1.5px solid #4a6cf7; }
 .ecal td.past  { background: #fafafa; }
@@ -279,7 +316,10 @@ def render_month_html(year: int, month: int, events: list[dict]) -> str:
             )
         rows_html += f"<tr>{row}</tr>"
 
-    return f"{css}<table class='ecal'><thead><tr>{header}</tr></thead><tbody>{rows_html}</tbody></table>"
+    html = f"{css}<table class='ecal'><thead><tr>{header}</tr></thead><tbody>{rows_html}</tbody></table>"
+    # 38px header row + ~104px per week row + 16px bottom padding
+    height = 38 + len(cal_weeks) * 104 + 16
+    return html, height
 
 
 # ── Email correlation ─────────────────────────────────────────────────────────
@@ -370,6 +410,7 @@ def find_related_emails(event: dict, limit: int = 15) -> list[dict]:
             attendee_email_ids.add(r["id"])
 
     # ── RRF merge ─────────────────────────────────────────────────────────────
+    # Priority: attendees > subject FTS > semantic > entity/tag
     fts_rank = {r["id"]: i for i, r in enumerate(fts_results)}
     sem_rank = {r["id"]: i for i, r in enumerate(sem_results)}
 
@@ -386,15 +427,15 @@ def find_related_emails(event: dict, limit: int = 15) -> list[dict]:
     for eid in all_ids:
         s = 0.0
         if eid in fts_rank:
-            s += 1.0 / (K + fts_rank[eid])
+            s += 2.0 / (K + fts_rank[eid])   # double weight vs semantic
         if eid in sem_rank:
             s += 1.0 / (K + sem_rank[eid])
         if eid in entity_email_ids:
-            s += 0.02
+            s += 0.005
         if eid in tag_email_ids:
-            s += 0.03
+            s += 0.003
         if eid in attendee_email_ids:
-            s += 0.10   # strongest boost — direct participant match
+            s += 0.50   # dominant — direct attendee/organiser match
         scores[eid] = s
 
     ranked_ids = sorted(scores, key=lambda x: -scores[x])[:limit]
@@ -403,6 +444,19 @@ def find_related_emails(event: dict, limit: int = 15) -> list[dict]:
     for eid in ranked_ids:
         em = indexer.get_email_by_id(eid)
         if em:
+            em = dict(em)
+            signals: list[str] = []
+            if eid in attendee_email_ids:
+                signals.append("👥 Attendee")
+            if eid in fts_rank:
+                signals.append("📝 Subject")
+            if eid in sem_rank:
+                signals.append("🔍 Semantic")
+            if eid in entity_email_ids:
+                signals.append("🏷 Entity")
+            if eid in tag_email_ids:
+                signals.append("🔖 Tag")
+            em["_match_signals"] = signals
             results.append(em)
     return results
 
