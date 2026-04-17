@@ -1069,16 +1069,25 @@ with tab_calendar:
                         f"{e['start_dt'].strftime('%b %d  %H:%M')}  —  {e['subject']}"
                         for e in _month_evs
                     ]
-                    _picked_month = st.selectbox(
+                    # Store mapping so the on_change callback can resolve the selection
+                    # without re-running the main body logic on every rerun.
+                    st.session_state["_cal_month_evs_map"] = dict(
+                        zip(_ev_labels_month, _month_evs)
+                    )
+
+                    def _on_month_pick():
+                        val = st.session_state.get("cal_month_pick", "")
+                        mapping = st.session_state.get("_cal_month_evs_map", {})
+                        if val and val in mapping:
+                            st.session_state["cal_selected_event"] = mapping[val]
+
+                    st.selectbox(
                         "Event",
                         options=[""] + _ev_labels_month,
                         label_visibility="collapsed",
                         key="cal_month_pick",
+                        on_change=_on_month_pick,
                     )
-                    if _picked_month:
-                        _idx = _ev_labels_month.index(_picked_month)
-                        st.session_state["cal_selected_event"] = _month_evs[_idx]
-                        st.session_state.pop("cal_list_pick", None)
                 else:
                     st.info("No events in this month.")
 
